@@ -135,6 +135,28 @@ class TestSovereignRepositoryAudit(unittest.TestCase):
         mse_red = quant._verify_awq_salient_channel_scaling()
         self.assertGreater(mse_red, 25.0)
 
+    def test_06_bash_orchestrators_syntax_valid(self) -> None:
+        """Verifies zero Bash syntax or line-wrapping errors across all .sh scripts."""
+        import subprocess
+
+        sh_targets = [
+            REPO_ROOT / "03_llm_training/model_registry/export_awq_gguf.sh",
+            REPO_ROOT / "00_infra_bootstrap/gcp_gpu_cluster/run_gcp_cuda_training.sh",
+        ]
+        for sh_path in sh_targets:
+            self.assertTrue(sh_path.exists(), f"Missing script: {sh_path}")
+            proc = subprocess.run(
+                ["bash", "-n", str(sh_path)],
+                capture_output=True,
+                text=True,
+                check=False,
+            )
+            self.assertEqual(
+                proc.returncode,
+                0,
+                f"Bash syntax error in {sh_path}: {proc.stderr}",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

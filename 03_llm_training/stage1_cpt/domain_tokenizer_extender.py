@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""
+r"""
 ================================================================================
 SOVEREIGN PROBABILITY ENGINE — STAGE 4A: CONTINUAL PRE-TRAINING (CPT)
 File: 03_llm_training/stage1_cpt/domain_tokenizer_extender.py

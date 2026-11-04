@@ -1,0 +1,108 @@
+{
+  "stage": "STAGE_3_PART_E_PARQUET_WAREHOUSE_SPLITTER",
+  "timestamp_utc": "2026-10-25T05:36:43.639722+00:00",
+  "schema_registry_version": "1.0.0-sovereign-stage3-warehouse",
+  "schema_validation_passed": true,
+  "zero_market_overlap_verified": true,
+  "target_outcome_masked_in_prompts": true,
+  "stage3_final_gate_passed": true,
+  "total_shards_materialized": 9,
+  "split_row_counts": {
+    "TRAIN": 2800,
+    "VAL": 600,
+    "TEST": 600
+  },
+  "shards": [
+    {
+      "dataset_tier": "stage4a_cpt_corpus",
+      "split_name": "TRAIN",
+      "parquet_path": "data/processed_warehouse/final_splits/cpt_corpus/train_cpt_shard_00000.parquet",
+      "row_count": 2800,
+      "unique_markets_count": 700,
+      "columns_count": 9,
+      "file_size_bytes": 1103879,
+      "sha256_digest": "543e63a6afbd85cfbd7212abe0ee3ae0add973a1f6dc39b651ecfd6fbd9cf697"
+    },
+    {
+      "dataset_tier": "stage4a_cpt_corpus",
+      "split_name": "VAL",
+      "parquet_path": "data/processed_warehouse/final_splits/cpt_corpus/val_cpt_shard_00000.parquet",
+      "row_count": 600,
+      "unique_markets_count": 150,
+      "columns_count": 9,
+      "file_size_bytes": 230246,
+      "sha256_digest": "96f3521ea6769ccfb8793ed2f984e78024cd2ee419541dda60677c53fac241c2"
+    },
+    {
+      "dataset_tier": "stage4a_cpt_corpus",
+      "split_name": "TEST",
+      "parquet_path": "data/processed_warehouse/final_splits/cpt_corpus/test_cpt_shard_00000.parquet",
+      "row_count": 600,
+      "unique_markets_count": 150,
+      "columns_count": 9,
+      "file_size_bytes": 223499,
+      "sha256_digest": "9820f19fbd2c52af11714dbf845dfd987078848007653303ab3e5b83d54df073"
+    },
+    {
+      "dataset_tier": "stage4b_sft_reasoning",
+      "split_name": "TRAIN",
+      "parquet_path": "data/processed_warehouse/final_splits/sft_reasoning/train_sft_shard_00000.parquet",
+      "row_count": 2800,
+      "unique_markets_count": 700,
+      "columns_count": 10,
+      "file_size_bytes": 2518188,
+      "sha256_digest": "85a4226f1fdcd5046d2872928bed81d75fc7b2b6a11783a8b970c79df4a1fe48"
+    },
+    {
+      "dataset_tier": "stage4b_sft_reasoning",
+      "split_name": "VAL",
+      "parquet_path": "data/processed_warehouse/final_splits/sft_reasoning/val_sft_shard_00000.parquet",
+      "row_count": 600,
+      "unique_markets_count": 150,
+      "columns_count": 10,
+      "file_size_bytes": 521291,
+      "sha256_digest": "e7f292905a79f85ae459007f030de22c0c3d6b8bf99f46f19627e86e0a4900d3"
+    },
+    {
+      "dataset_tier": "stage4b_sft_reasoning",
+      "split_name": "TEST",
+      "parquet_path": "data/processed_warehouse/final_splits/sft_reasoning/test_sft_shard_00000.parquet",
+      "row_count": 600,
+      "unique_markets_count": 150,
+      "columns_count": 10,
+      "file_size_bytes": 511399,
+      "sha256_digest": "f3605898d159cdd59f3e367bf1c656c6a2fd3d5dd13d6a9d51db2f575acdd525"
+    },
+    {
+      "dataset_tier": "stage5_grpo_verifiable",
+      "split_name": "TRAIN",
+      "parquet_path": "data/processed_warehouse/final_splits/grpo_verifiable/train_grpo_shard_00000.parquet",
+      "row_count": 2800,
+      "unique_markets_count": 700,
+      "columns_count": 17,
+      "file_size_bytes": 1087771,
+      "sha256_digest": "f96fde92f6f1163abbff8b546c230b5f8d64cbbcf654af1f486b56c00250f670"
+    },
+    {
+      "dataset_tier": "stage5_grpo_verifiable",
+      "split_name": "VAL",
+      "parquet_path": "data/processed_warehouse/final_splits/grpo_verifiable/val_grpo_shard_00000.parquet",
+      "row_count": 600,
+      "unique_markets_count": 150,
+      "columns_count": 17,
+      "file_size_bytes": 236368,
+      "sha256_digest": "6dd94cb1b4997aae2e4800e2971b68316f17dd631f67820966a2e7ca3cb3b987"
+    },
+    {
+      "dataset_tier": "stage5_grpo_verifiable",
+      "split_name": "TEST",
+      "parquet_path": "data/processed_warehouse/final_splits/grpo_verifiable/test_grpo_shard_00000.parquet",
+      "row_count": 600,
+      "unique_markets_count": 150,
+      "columns_count": 17,
+      "file_size_bytes": 232695,
+      "sha256_digest": "ef0bdd38d9df2e33f6f763c8239d368e384d7f51a30731f0e1952af95468184a"
+    }
+  ],
+  "certificate_path": "data/processed_warehouse/final_splits/stage3_warehouse_gate_certificate.json"
+}
