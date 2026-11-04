@@ -195,8 +195,13 @@ class HybridModelRouter:
                 "03_llm_training/model_registry/checkpoints/quantized_gguf_q4_k_m/sovereign-prob-7b-q4_k_m.gguf",
             )
         )
+        if not gguf_rel:
+            gguf_rel = "03_llm_training/model_registry/checkpoints/quantized_gguf_q4_k_m/sovereign-prob-7b-q4_k_m.gguf"
         gguf_path = pathlib.Path(gguf_rel)
-        return gguf_path.exists() and gguf_path.read_bytes()[:4] == b"GGUF"
+        if not (gguf_path.exists() and gguf_path.is_file()):
+            return False
+        with open(gguf_path, "rb") as handle:
+            return handle.read(4) == b"GGUF"
 
     async def route_forecast_for_snapshot(
         self, row: Dict[str, Any]

@@ -286,9 +286,22 @@ class DomainTokenizerExtender:
 
     def load_or_build_tokenizer(self, prefer_local_fast: bool = True) -> Tuple[Any, str, int]:
         """
-        Attempts to load HuggingFace `AutoTokenizer` if cached locally (or if
-        `prefer_local_fast=False`), otherwise returns `SovereignDeterministicTokenizer`.
+        Attempts to load an already-saved HuggingFace tokenizer from `self.output_dir`
+        first (preventing subsequent stages from overwriting a real HF tokenizer
+        with the deterministic offline stub), or downloads `self.base_model_id`
+        when `prefer_local_fast=False`, otherwise returns `SovereignDeterministicTokenizer`.
         """
+        if (self.output_dir / "tokenizer.json").exists():
+            try:
+                from transformers import AutoTokenizer  # type: ignore
+
+                tok = AutoTokenizer.from_pretrained(
+                    str(self.output_dir), trust_remote_code=True
+                )
+                return tok, "HUGGINGFACE_QWEN2_5_CACHED_TOKENIZER", 151646
+            except Exception as exc:
+                logger.debug("Cached HF tokenizer reload skipped: %s", exc)
+
         if not prefer_local_fast:
             try:
                 from transformers import AutoTokenizer  # type: ignore

@@ -169,51 +169,21 @@ class SovereignCPTTrainer:
         signal.signal(signal.SIGTERM, _handler)
 
     # --------------------------------------------------------------------------
-    # Tokenization & System-Preamble Loss Masking (`label = -100`)
-    # --------------------------------------------------------------------------
-    def tokenize_and_mask_cpt_document(
-        self, tokenizer: Any, cpt_text: str, max_seq_len: int = 512
-    ) -> Tuple[List[int], List[int], float]:
-        """
-        Tokenizes a ChatML CPT document and masks all tokens belonging to the
-        `<|im_start|>system...<|im_end|>` preamble with `IGNORE_INDEX = -100`.
-        Returns `(input_ids, labels, masked_preamble_pct)`.
-        """
-        user_marker = "<|im_start|>user\n"
-        marker_pos = cpt_text.find(user_marker)
-
-        if marker_pos != -1:
-            preamble_str = cpt_text[: marker_pos + len(user_marker)]
-            body_str = cpt_text[marker_pos + len(user_marker) :]
-            preamble_ids = tokenizer.encode(preamble_str)
-            body_ids = tokenizer.encode(body_str)
-            input_ids = (preamble_ids + body_ids)[:max_seq_len]
-            n_mask = min(len(preamble_ids), len(input_ids))
-            labels = (
-                [self.IGNORE_INDEX] * n_mask + input_ids[n_mask:]
-            )
-        else:
-            input_ids = tokenizer.encode(cpt_text)[:max_seq_len]
-            labels = list(input_ids)
-            n_mask = 0
-
-        masked_pct = round((n_mask / max(1, len(input_ids))) * 100.0, 2)
-        return input_ids, labels, masked_pct
-
-    # --------------------------------------------------------------------------
-    # Hardware AMD Instinct MI300X (ROCm BF16) CPT Execution Branch
+    # Hardware GPU (GCP NVIDIA L4/A100 CUDA or AMD MI300X ROCm) CPT Branch
     # --------------------------------------------------------------------------
     def _try_run_hardware_rocm_cpt(
         self, train_rows: List[Dict[str, Any]], val_rows: List[Dict[str, Any]], num_steps: int
     ) -> Optional[Tuple[float, float, List[CPTStepLog], int]]:
         """
-        When running on the bare-metal AMD Instinct MI300X (192GB HBM3, ROCm),
-        loads `Qwen/Qwen2.5-7B` in `torch.bfloat16`, resizes token embeddings
-        for the 43 new domain tokens, runs real PyTorch GPU backpropagation on
-        the CPT corpus, and saves the adapted HuggingFace model + tokenizer to
-        `03_llm_training/model_registry/checkpoints/stage1_cpt`.
+        When running on a physical GPU (NVIDIA L4 24GB / A100 on GCP or AMD
+        Instinct MI300X 192GB), loads `Qwen/Qwen2.5-7B` in `torch.bfloat16`,
+        resizes token embeddings for the 43 new domain tokens, freezes interior
+        layers so optimizer states fit comfortably in 24GB VRAM, enables
+        gradient checkpointing, runs real PyTorch GPU backpropagation on the
+        CPT corpus, and saves the adapted HuggingFace model + tokenizer.
         """
         try:
+            import gc
             import torch  # type: ignore
             from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore
         except Exception:
@@ -222,8 +192,16 @@ class SovereignCPTTrainer:
         if not (getattr(torch.version, "hip", None) or torch.cuda.is_available()):
             return None
 
-        logger.info("Detected ROCm/CUDA GPU (%s); running real BF16 CPT on Qwen/Qwen2.5-7B...", torch.cuda.get_device_name(0))
+        gpu_name = torch.cuda.get_device_name(0)
+        vram_gib = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+        logger.info(
+            "Detected Hardware GPU (%s, %.1f GiB VRAM); running BF16 CPT on Qwen/Qwen2.5-7B...",
+            gpu_name,
+            vram_gib,
+        )
         base_model_id = os.environ.get("SOVEREIGN_BASE_MODEL", "Qwen/Qwen2.5-7B")
+        model = None
+        optimizer = None
         try:
             tokenizer = AutoTokenizer.from_pretrained(base_model_id, trust_remote_code=True)
             tokenizer.add_special_tokens({"additional_special_tokens": list(ALL_DOMAIN_SPECIAL_TOKENS)})
@@ -234,21 +212,38 @@ class SovereignCPTTrainer:
                 base_model_id,
                 torch_dtype=torch.bfloat16,
                 device_map="cuda:0",
+                low_cpu_mem_usage=True,
                 trust_remote_code=True,
             )
             aligned_vocab = int(math.ceil(len(tokenizer) / 64.0) * 64)
             model.resize_token_embeddings(aligned_vocab)
-            model.train()
+            model.config.use_cache = False
+            if hasattr(model, "gradient_checkpointing_enable"):
+                model.gradient_checkpointing_enable()
 
-            optimizer = torch.optim.AdamW(model.parameters(), lr=2.0e-5, weight_decay=0.01)
+            # Selective layer unfreezing: train newly resized embed_tokens, lm_head,
+            # norm, and top 2 decoder layers so 7B CPT fits inside 24GB L4 GPUs
+            # without 60GB AdamW state OOMs while preserving base weights.
+            for name, param in model.named_parameters():
+                if any(
+                    k in name
+                    for k in ("embed_tokens", "lm_head", "model.norm", "layers.26.", "layers.27.")
+                ):
+                    param.requires_grad = True
+                else:
+                    param.requires_grad = False
+
+            trainable_params = [p for p in model.parameters() if p.requires_grad]
+            model.train()
+            optimizer = torch.optim.AdamW(trainable_params, lr=2.0e-5, weight_decay=0.01)
 
             def _eval_val_loss() -> float:
                 model.eval()
                 losses: List[float] = []
                 with torch.no_grad():
-                    for r in val_rows[:16]:
+                    for r in val_rows[:8]:
                         inp, lbl, _ = self.tokenize_and_mask_cpt_document(
-                            tokenizer, str(r["cpt_unsupervised_text"]), max_seq_len=1024
+                            tokenizer, str(r["cpt_unsupervised_text"]), max_seq_len=512
                         )
                         t_inp = torch.tensor([inp], dtype=torch.long, device="cuda:0")
                         t_lbl = torch.tensor([lbl], dtype=torch.long, device="cuda:0")
@@ -263,16 +258,16 @@ class SovereignCPTTrainer:
             for step_idx in range(1, num_steps + 1):
                 row = train_rows[(step_idx - 1) % len(train_rows)]
                 inp, lbl, mask_pct = self.tokenize_and_mask_cpt_document(
-                    tokenizer, str(row["cpt_unsupervised_text"]), max_seq_len=1024
+                    tokenizer, str(row["cpt_unsupervised_text"]), max_seq_len=512
                 )
                 t_inp = torch.tensor([inp], dtype=torch.long, device="cuda:0")
                 t_lbl = torch.tensor([lbl], dtype=torch.long, device="cuda:0")
 
-                optimizer.zero_grad()
+                optimizer.zero_grad(set_to_none=True)
                 out = model(input_ids=t_inp, labels=t_lbl)
                 loss = out.loss
                 loss.backward()
-                torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+                torch.nn.utils.clip_grad_norm_(trainable_params, 1.0)
                 optimizer.step()
 
                 loss_val = round(float(loss.item()), 5)
@@ -296,11 +291,16 @@ class SovereignCPTTrainer:
             model.save_pretrained(str(self.checkpoint_dir), safe_serialization=True, max_shard_size="5GB")
             tokenizer.save_pretrained(str(self.checkpoint_dir / "extended_tokenizer"))
             tokenizer.save_pretrained(str(self.checkpoint_dir))
-            del model
-            torch.cuda.empty_cache()
             return init_val_loss, final_val_loss, step_logs, aligned_vocab
         except Exception as exc:
-            logger.warning("Hardware ROCm CPT fallback (%s); using deterministic verifier.", exc)
+            logger.warning("Hardware GPU CPT fallback (%s); using deterministic verifier.", exc)
+            return None
+        finally:
+            del optimizer
+            del model
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             return None
 
     # --------------------------------------------------------------------------

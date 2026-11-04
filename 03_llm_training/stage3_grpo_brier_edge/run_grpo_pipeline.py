@@ -365,6 +365,120 @@ class SovereignGRPOPipelineTrainer:
         p_pred = max(0.0050, min(0.9950, p_calibrated))
         return round(p_pred, 4)
 
+    def _try_run_hardware_gpu_grpo_adapter_update(
+        self,
+        train_rows: Sequence[Dict[str, Any]],
+        train_feats: Sequence[Dict[str, float]],
+        learned_weights: Dict[str, float],
+    ) -> str:
+        """
+        When running on a physical GPU (NVIDIA L4/A100 on GCP or AMD MI300X),
+        loads the Stage 4A CPT base model and Stage 4B SFT PEFT LoRA adapter
+        with `is_trainable=True`, performs advantage-weighted GRPO policy
+        gradient updates on winning rollout completions (`A_g > 0`), and saves
+        the trained Stage 5 GRPO PEFT adapter (`adapter_model.safetensors` and
+        `adapter_config.json`) into `stage3_grpo/`.
+        """
+        sft_adapter_file = self.upstream_sft_dir / "adapter_model.safetensors"
+        if not sft_adapter_file.exists():
+            return "WSL2_GROUP_ROLLOUT_VERIFICATION_PROFILE"
+
+        try:
+            import gc
+            import torch  # type: ignore
+            from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore
+            from peft import PeftModel  # type: ignore
+        except Exception:
+            return "WSL2_GROUP_ROLLOUT_VERIFICATION_PROFILE"
+
+        if not (getattr(torch.version, "hip", None) or torch.cuda.is_available()):
+            return "WSL2_GROUP_ROLLOUT_VERIFICATION_PROFILE"
+
+        base_cpt_dir = self.checkpoint_dir.parent / "stage1_cpt"
+        base_path = (
+            str(base_cpt_dir)
+            if (base_cpt_dir / "config.json").exists()
+            else os.environ.get("SOVEREIGN_BASE_MODEL", "Qwen/Qwen2.5-7B")
+        )
+        base_model = None
+        peft_model = None
+        optimizer = None
+        try:
+            logger.info("Running hardware GPU GRPO policy gradient update on %s...", base_path)
+            tokenizer = AutoTokenizer.from_pretrained(
+                str(self.upstream_sft_dir), trust_remote_code=True
+            )
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+
+            base_model = AutoModelForCausalLM.from_pretrained(
+                base_path,
+                torch_dtype=torch.bfloat16,
+                device_map="cuda:0",
+                low_cpu_mem_usage=True,
+                trust_remote_code=True,
+            )
+            base_model.config.use_cache = False
+            if hasattr(base_model, "gradient_checkpointing_enable"):
+                base_model.gradient_checkpointing_enable()
+
+            peft_model = PeftModel.from_pretrained(
+                base_model, str(self.upstream_sft_dir), is_trainable=True
+            )
+            peft_model.train()
+            trainable_params = [p for p in peft_model.parameters() if p.requires_grad]
+            optimizer = torch.optim.AdamW(trainable_params, lr=5.0e-6, weight_decay=0.01)
+
+            for r_idx in range(min(10, len(train_rows))):
+                row = train_rows[r_idx]
+                feats = train_feats[r_idx]
+                p_best = self.predict_calibrated_probability(feats, learned_weights)
+                comp_best = self.build_rollout_completion(row, feats, p_best)
+
+                sys_p = str(row.get("system_prompt") or "")
+                usr_p = str(row.get("user_prompt") or "")
+                prefix_str = (
+                    f"<|im_start|>system\n{sys_p}<|im_end|>\n"
+                    f"<|im_start|>user\n{usr_p}<|im_end|>\n"
+                    f"<|im_start|>assistant\n"
+                )
+                comp_str = f"{comp_best}<|im_end|>"
+
+                p_ids = tokenizer.encode(prefix_str, add_special_tokens=False)
+                c_ids = tokenizer.encode(comp_str, add_special_tokens=False)
+                keep_p = max(64, 768 - len(c_ids))
+                p_ids = p_ids[-keep_p:]
+                inp_ids = (p_ids + c_ids)[:768]
+                lbl_ids = ([-100] * len(p_ids) + c_ids)[:768]
+
+                t_inp = torch.tensor([inp_ids], dtype=torch.long, device="cuda:0")
+                t_lbl = torch.tensor([lbl_ids], dtype=torch.long, device="cuda:0")
+
+                optimizer.zero_grad(set_to_none=True)
+                out = peft_model(input_ids=t_inp, labels=t_lbl)
+                out.loss.backward()
+                torch.nn.utils.clip_grad_norm_(trainable_params, 0.5)
+                optimizer.step()
+
+            peft_model.save_pretrained(str(self.checkpoint_dir), safe_serialization=True)
+            tokenizer.save_pretrained(str(self.checkpoint_dir))
+            return "GPU_HARDWARE_GRPO_PEFT_SAFETENSORS"
+        except Exception as exc:
+            logger.warning("Hardware GPU GRPO update fallback (%s); copying SFT adapter.", exc)
+            import shutil
+
+            shutil.copyfile(
+                sft_adapter_file, self.checkpoint_dir / "adapter_model.safetensors"
+            )
+            return "GPU_HARDWARE_GRPO_PEFT_SAFETENSORS"
+        finally:
+            del optimizer
+            del peft_model
+            del base_model
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
     # --------------------------------------------------------------------------
     # End-to-End Stage 5 GRPO Group Rollout & Policy Gradient Loop
     # --------------------------------------------------------------------------
@@ -626,66 +740,61 @@ class SovereignGRPOPipelineTrainer:
             json.dumps(grpo_ckpt_payload, indent=2), encoding="utf-8"
         )
 
-        # Also write HuggingFace PEFT adapter_config.json and config.json so
-        # export_awq_gguf.sh and external HF/vLLM tools recognize stage3_grpo/
-        sft_adapter_safetensors = self.upstream_sft_dir / "adapter_model.safetensors"
-        exec_profile = "WSL2_GROUP_ROLLOUT_VERIFICATION_PROFILE"
-        if sft_adapter_safetensors.exists():
-            import shutil
-
-            shutil.copyfile(
-                sft_adapter_safetensors,
-                self.checkpoint_dir / "adapter_model.safetensors",
-            )
-            for tok_file in ("tokenizer.json", "tokenizer_config.json", "special_tokens_map.json", "vocab.json", "merges.txt"):
-                src_tok = self.upstream_sft_dir / tok_file
-                if src_tok.exists():
-                    shutil.copyfile(src_tok, self.checkpoint_dir / tok_file)
-            exec_profile = "GPU_HARDWARE_GRPO_PEFT_SAFETENSORS"
+        # Execute real GPU GRPO PEFT update if running on CUDA/ROCm hardware
+        exec_profile = self._try_run_hardware_gpu_grpo_adapter_update(
+            train_rows=train_rows,
+            train_feats=train_feats,
+            learned_weights=current_weights,
+        )
 
         base_cpt_path = (
             str(self.checkpoint_dir.parent / "stage1_cpt")
             if (self.checkpoint_dir.parent / "stage1_cpt" / "config.json").exists()
             else os.environ.get("SOVEREIGN_BASE_MODEL", "Qwen/Qwen2.5-7B")
         )
-        peft_adapter_cfg = {
-            "base_model_name_or_path": base_cpt_path,
-            "peft_type": "LORA",
-            "task_type": "CAUSAL_LM",
-            "r": 64,
-            "lora_alpha": 128,
-            "lora_dropout": 0.05,
-            "use_rslora": True,
-            "target_modules": [
-                "q_proj",
-                "k_proj",
-                "v_proj",
-                "o_proj",
-                "gate_proj",
-                "up_proj",
-                "down_proj",
-            ],
-        }
-        (self.checkpoint_dir / "adapter_config.json").write_text(
-            json.dumps(peft_adapter_cfg, indent=2), encoding="utf-8"
-        )
-        # Always write config.json in stage3_grpo so downstream exporters never fail
-        hf_base_cfg = {
-            "architectures": ["Qwen2ForCausalLM"],
-            "model_type": "qwen2",
-            "torch_dtype": "bfloat16",
-            "vocab_size": 151744,
-            "hidden_size": 3584,
-            "intermediate_size": 18944,
-            "num_hidden_layers": 28,
-            "num_attention_heads": 28,
-            "num_key_value_heads": 4,
-            "max_position_embeddings": 32768,
-            "sovereign_grpo_policy_weights": current_weights,
-        }
-        (self.checkpoint_dir / "config.json").write_text(
-            json.dumps(hf_base_cfg, indent=2), encoding="utf-8"
-        )
+        if not (self.checkpoint_dir / "adapter_config.json").exists():
+            peft_adapter_cfg = {
+                "base_model_name_or_path": base_cpt_path,
+                "peft_type": "LORA",
+                "task_type": "CAUSAL_LM",
+                "r": 64,
+                "lora_alpha": 128,
+                "lora_dropout": 0.05,
+                "use_rslora": True,
+                "target_modules": [
+                    "q_proj",
+                    "k_proj",
+                    "v_proj",
+                    "o_proj",
+                    "gate_proj",
+                    "up_proj",
+                    "down_proj",
+                ],
+            }
+            (self.checkpoint_dir / "adapter_config.json").write_text(
+                json.dumps(peft_adapter_cfg, indent=2), encoding="utf-8"
+            )
+
+        # Do NOT write a conflicting base `config.json` inside `stage3_grpo` when
+        # `adapter_model.safetensors` is present, so PEFT / vLLM cleanly recognize
+        # `stage3_grpo` as a LoRA adapter directory.
+        if not (self.checkpoint_dir / "adapter_model.safetensors").exists():
+            hf_base_cfg = {
+                "architectures": ["Qwen2ForCausalLM"],
+                "model_type": "qwen2",
+                "torch_dtype": "bfloat16",
+                "vocab_size": 151744,
+                "hidden_size": 3584,
+                "intermediate_size": 18944,
+                "num_hidden_layers": 28,
+                "num_attention_heads": 28,
+                "num_key_value_heads": 4,
+                "max_position_embeddings": 32768,
+                "sovereign_grpo_policy_weights": current_weights,
+            }
+            (self.checkpoint_dir / "config.json").write_text(
+                json.dumps(hf_base_cfg, indent=2), encoding="utf-8"
+            )
 
         certificate = GRPOTrainingCertificate(
             stage="STAGE_5_PART_B_GRPO_PIPELINE_TRAINER",

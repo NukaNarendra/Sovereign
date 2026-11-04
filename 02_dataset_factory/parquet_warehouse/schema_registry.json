@@ -5,7 +5,6 @@
 "_comment_purpose": "Canonical Apache Arrow / Polars / PyArrow schema contracts for Stage 4A Continual Pre-Training (CPT), Stage 4B Supervised Fine-Tuning (SFT), and Stage 5 Group Relative Policy Optimization (GRPO Brier + CLOB Edge RL).",
 "_comment_security": "Strictly separates PROMPT_VISIBLE input features from TARGET_MASKED_FOR_REWARD ground-truth labels so target outcomes never leak into model input prompts.",
 "_comment_footer": "",
-
 "registry_version": "1.0.0-sovereign-stage3-warehouse",
 "compression_codec": "zstd",
 "chronological_split_ratios": {
@@ -19,7 +18,6 @@
 "enforce_feature_timestamp_lte_cutoff": true,
 "enforce_blind_teacher_sft_traces": true
 },
-
 "datasets": {
 "stage4a_cpt_corpus": {
 "description": "Unsupervised Continual Pre-Training (CPT) corpus teaching Qwen-2.5-7B Polymarket UMA Optimistic Oracle rules, 5-level L2 CLOB order books, 24h price trajectories, and point-in-time news wires.",
@@ -94,238 +92,234 @@
 "min_value": 64,
 "max_value": 8192,
 "visibility": "METADATA_STATS",
-"description": "Estimated token count for sequence packing on AMD Instinct MI300X."
+"description": "Estimated token count for sequence packing on GPU."
 }
 ]
 },
-
 "stage4b_sft_reasoning": {
-  "description": "Supervised Fine-Tuning (SFT) dataset pairing the 8-block XML market prompt with a verified blind 5-step Tetlock Superforecaster Chain-of-Thought completion (<reasoning>, <prob>, <edge>).",
-  "output_directory": "data/processed_warehouse/final_splits/sft_reasoning",
-  "manifest_file": "02_dataset_factory/parquet_warehouse/sft_reasoning_manifest.yaml",
-  "primary_key": "snapshot_uid",
-  "required_columns": [
-    {
-      "name": "snapshot_uid",
-      "dtype": "string",
-      "nullable": false,
-      "visibility": "METADATA_ID",
-      "description": "Unique point-in-time snapshot identifier."
-    },
-    {
-      "name": "market_id",
-      "dtype": "string",
-      "nullable": false,
-      "visibility": "METADATA_ID",
-      "description": "Polymarket Gamma numeric market ID."
-    },
-    {
-      "name": "dataset_split",
-      "dtype": "string",
-      "nullable": false,
-      "allowed_values": ["TRAIN", "VAL", "TEST"],
-      "visibility": "METADATA_SPLIT",
-      "description": "Market-grouped chronological split."
-    },
-    {
-      "name": "system_prompt",
-      "dtype": "string",
-      "nullable": false,
-      "visibility": "PROMPT_VISIBLE",
-      "description": "Canonical Sovereign-Prob-7B system instruction."
-    },
-    {
-      "name": "user_prompt",
-      "dtype": "string",
-      "nullable": false,
-      "visibility": "PROMPT_VISIBLE",
-      "description": "8-section XML market state prompt strictly blind to outcome o."
-    },
-    {
-      "name": "assistant_response",
-      "dtype": "string",
-      "nullable": false,
-      "visibility": "SFT_COMPLETION_TARGET",
-      "description": "Verified 5-step Superforecaster <reasoning>, <prob>, and <edge> trace."
-    },
-    {
-      "name": "sft_full_chatml_text",
-      "dtype": "string",
-      "nullable": false,
-      "visibility": "SFT_FULL_SEQUENCE",
-      "description": "Complete <|im_start|>system...user...assistant<|im_end|> sequence."
-    },
-    {
-      "name": "teacher_predicted_prob_p",
-      "dtype": "float64",
-      "nullable": false,
-      "min_value": 0.0001,
-      "max_value": 0.9999,
-      "visibility": "METADATA_AUDIT",
-      "description": "Calibrated YES probability p output by the blind teacher trace."
-    },
-    {
-      "name": "teacher_predicted_edge",
-      "dtype": "float64",
-      "nullable": false,
-      "min_value": -0.9999,
-      "max_value": 0.9999,
-      "visibility": "METADATA_AUDIT",
-      "description": "Signed net edge (p - q_t) verified within +/- 0.0015 tolerance."
-    },
-    {
-      "name": "sft_quality_certificate",
-      "dtype": "string",
-      "nullable": false,
-      "allowed_values": ["VERIFIED_BLIND_SUPERFORECASTER"],
-      "visibility": "METADATA_AUDIT",
-      "description": "4-gate HindsightBiasFilter verification stamp."
-    }
-  ]
+"description": "Supervised Fine-Tuning (SFT) dataset pairing the 8-block XML market prompt with a verified blind 5-step Tetlock Superforecaster Chain-of-Thought completion (, , ).",
+"output_directory": "data/processed_warehouse/final_splits/sft_reasoning",
+"manifest_file": "02_dataset_factory/parquet_warehouse/sft_reasoning_manifest.yaml",
+"primary_key": "snapshot_uid",
+"required_columns": [
+{
+"name": "snapshot_uid",
+"dtype": "string",
+"nullable": false,
+"visibility": "METADATA_ID",
+"description": "Unique point-in-time snapshot identifier."
 },
-
-"stage5_grpo_verifiable": {
-  "description": "Group Relative Policy Optimization (GRPO) reinforcement learning dataset containing the blind user prompt alongside the masked ground-truth verification targets (o, q_t, s_t, min_edge_hurdle) required by the Brier + CLOB Spread-Edge reward functions.",
-  "output_directory": "data/processed_warehouse/final_splits/grpo_verifiable",
-  "manifest_file": "02_dataset_factory/parquet_warehouse/grpo_verifiable_manifest.yaml",
-  "primary_key": "snapshot_uid",
-  "required_columns": [
-    {
-      "name": "snapshot_uid",
-      "dtype": "string",
-      "nullable": false,
-      "visibility": "METADATA_ID",
-      "description": "Unique point-in-time snapshot identifier."
-    },
-    {
-      "name": "market_id",
-      "dtype": "string",
-      "nullable": false,
-      "visibility": "METADATA_ID",
-      "description": "Polymarket Gamma numeric market ID."
-    },
-    {
-      "name": "condition_id",
-      "dtype": "string",
-      "nullable": false,
-      "visibility": "METADATA_ID",
-      "description": "32-byte Polygon CTF conditionId."
-    },
-    {
-      "name": "dataset_split",
-      "dtype": "string",
-      "nullable": false,
-      "allowed_values": ["TRAIN", "VAL", "TEST"],
-      "visibility": "METADATA_SPLIT",
-      "description": "Market-grouped chronological split."
-    },
-    {
-      "name": "canonical_category",
-      "dtype": "string",
-      "nullable": false,
-      "visibility": "PROMPT_VISIBLE",
-      "description": "Canonical domain for stratified evaluation."
-    },
-    {
-      "name": "correlation_cluster_key",
-      "dtype": "string",
-      "nullable": false,
-      "visibility": "PROMPT_VISIBLE",
-      "description": "Cluster ID used for portfolio correlation capping."
-    },
-    {
-      "name": "horizon_hours_before_close",
-      "dtype": "int64",
-      "nullable": false,
-      "visibility": "PROMPT_VISIBLE",
-      "description": "Forecasting horizon in hours prior to close."
-    },
-    {
-      "name": "system_prompt",
-      "dtype": "string",
-      "nullable": false,
-      "visibility": "PROMPT_VISIBLE",
-      "description": "System prompt fed to vLLM rollout generator during GRPO."
-    },
-    {
-      "name": "user_prompt",
-      "dtype": "string",
-      "nullable": false,
-      "visibility": "PROMPT_VISIBLE",
-      "description": "8-section XML market state prompt fed to vLLM rollout generator."
-    },
-    {
-      "name": "implied_prob_mid_qt",
-      "dtype": "float64",
-      "nullable": false,
-      "min_value": 0.001,
-      "max_value": 0.999,
-      "visibility": "REWARD_VERIFIER_INPUT",
-      "description": "CLOB market consensus midpoint probability q_t at cutoff."
-    },
-    {
-      "name": "estimated_spread_st",
-      "dtype": "float64",
-      "nullable": false,
-      "min_value": 0.0005,
-      "max_value": 0.50,
-      "visibility": "REWARD_VERIFIER_INPUT",
-      "description": "CLOB bid-ask spread s_t at cutoff."
-    },
-    {
-      "name": "min_required_edge_to_trade",
-      "dtype": "float64",
-      "nullable": false,
-      "min_value": 0.001,
-      "max_value": 0.30,
-      "visibility": "REWARD_VERIFIER_INPUT",
-      "description": "Minimum absolute edge |p - q_t| required to overcome half-spread + fee buffer."
-    },
-    {
-      "name": "uma_ambiguity_hazard_score",
-      "dtype": "float64",
-      "nullable": false,
-      "min_value": 0.0,
-      "max_value": 1.0,
-      "visibility": "REWARD_VERIFIER_INPUT",
-      "description": "UMA Optimistic Oracle ambiguity hazard score in [0.0, 1.0]."
-    },
-    {
-      "name": "safe_for_survival_5usd_bot",
-      "dtype": "bool",
-      "nullable": false,
-      "visibility": "REWARD_VERIFIER_INPUT",
-      "description": "True if contract passes UMA ambiguity safety threshold (<= 0.45)."
-    },
-    {
-      "name": "grpo_curriculum_weight",
-      "dtype": "float64",
-      "nullable": false,
-      "min_value": 0.1,
-      "max_value": 5.0,
-      "visibility": "REWARD_VERIFIER_INPUT",
-      "description": "Inverse-propensity & Shannon-entropy sampling weight."
-    },
-    {
-      "name": "resolved_binary_outcome",
-      "dtype": "int64",
-      "nullable": false,
-      "allowed_values": [0, 1],
-      "visibility": "TARGET_MASKED_FOR_REWARD",
-      "description": "Verifiable binary resolution outcome o in {0, 1}. Strictly masked from prompt!"
-    },
-    {
-      "name": "market_baseline_brier_loss",
-      "dtype": "float64",
-      "nullable": false,
-      "min_value": 0.0,
-      "max_value": 1.0,
-      "visibility": "REWARD_VERIFIER_INPUT",
-      "description": "Market consensus Brier loss (q_t - o)^2 for computing Brier Skill Score (BSS)."
-    }
-  ]
+{
+"name": "market_id",
+"dtype": "string",
+"nullable": false,
+"visibility": "METADATA_ID",
+"description": "Polymarket Gamma numeric market ID."
+},
+{
+"name": "dataset_split",
+"dtype": "string",
+"nullable": false,
+"allowed_values": ["TRAIN", "VAL", "TEST"],
+"visibility": "METADATA_SPLIT",
+"description": "Market-grouped chronological split."
+},
+{
+"name": "system_prompt",
+"dtype": "string",
+"nullable": false,
+"visibility": "PROMPT_VISIBLE",
+"description": "Canonical Sovereign-Prob-7B system instruction."
+},
+{
+"name": "user_prompt",
+"dtype": "string",
+"nullable": false,
+"visibility": "PROMPT_VISIBLE",
+"description": "8-section XML market state prompt strictly blind to outcome o."
+},
+{
+"name": "assistant_response",
+"dtype": "string",
+"nullable": false,
+"visibility": "SFT_COMPLETION_TARGET",
+"description": "Verified 5-step Superforecaster , , and  trace."
+},
+{
+"name": "sft_full_chatml_text",
+"dtype": "string",
+"nullable": false,
+"visibility": "SFT_FULL_SEQUENCE",
+"description": "Complete <|im_start|>system...user...assistant<|im_end|> sequence."
+},
+{
+"name": "teacher_predicted_prob_p",
+"dtype": "float64",
+"nullable": false,
+"min_value": 0.0001,
+"max_value": 0.9999,
+"visibility": "METADATA_AUDIT",
+"description": "Calibrated YES probability p output by the blind teacher trace."
+},
+{
+"name": "teacher_predicted_edge",
+"dtype": "float64",
+"nullable": false,
+"min_value": -0.9999,
+"max_value": 0.9999,
+"visibility": "METADATA_AUDIT",
+"description": "Signed net edge (p - q_t) verified within +/- 0.0015 tolerance."
+},
+{
+"name": "sft_quality_certificate",
+"dtype": "string",
+"nullable": false,
+"allowed_values": ["VERIFIED_BLIND_SUPERFORECASTER"],
+"visibility": "METADATA_AUDIT",
+"description": "4-gate HindsightBiasFilter verification stamp."
 }
-
-
+]
+},
+"stage5_grpo_verifiable": {
+"description": "Group Relative Policy Optimization (GRPO) reinforcement learning dataset containing the blind user prompt alongside the masked ground-truth verification targets (o, q_t, s_t, min_edge_hurdle) required by the Brier + CLOB Spread-Edge reward functions.",
+"output_directory": "data/processed_warehouse/final_splits/grpo_verifiable",
+"manifest_file": "02_dataset_factory/parquet_warehouse/grpo_verifiable_manifest.yaml",
+"primary_key": "snapshot_uid",
+"required_columns": [
+{
+"name": "snapshot_uid",
+"dtype": "string",
+"nullable": false,
+"visibility": "METADATA_ID",
+"description": "Unique point-in-time snapshot identifier."
+},
+{
+"name": "market_id",
+"dtype": "string",
+"nullable": false,
+"visibility": "METADATA_ID",
+"description": "Polymarket Gamma numeric market ID."
+},
+{
+"name": "condition_id",
+"dtype": "string",
+"nullable": false,
+"visibility": "METADATA_ID",
+"description": "32-byte Polygon CTF conditionId."
+},
+{
+"name": "dataset_split",
+"dtype": "string",
+"nullable": false,
+"allowed_values": ["TRAIN", "VAL", "TEST"],
+"visibility": "METADATA_SPLIT",
+"description": "Market-grouped chronological split."
+},
+{
+"name": "canonical_category",
+"dtype": "string",
+"nullable": false,
+"visibility": "PROMPT_VISIBLE",
+"description": "Canonical domain for stratified evaluation."
+},
+{
+"name": "correlation_cluster_key",
+"dtype": "string",
+"nullable": false,
+"visibility": "PROMPT_VISIBLE",
+"description": "Cluster ID used for portfolio correlation capping."
+},
+{
+"name": "horizon_hours_before_close",
+"dtype": "int64",
+"nullable": false,
+"visibility": "PROMPT_VISIBLE",
+"description": "Forecasting horizon in hours prior to close."
+},
+{
+"name": "system_prompt",
+"dtype": "string",
+"nullable": false,
+"visibility": "PROMPT_VISIBLE",
+"description": "System prompt fed to rollout generator during GRPO."
+},
+{
+"name": "user_prompt",
+"dtype": "string",
+"nullable": false,
+"visibility": "PROMPT_VISIBLE",
+"description": "8-section XML market state prompt fed to rollout generator."
+},
+{
+"name": "implied_prob_mid_qt",
+"dtype": "float64",
+"nullable": false,
+"min_value": 0.001,
+"max_value": 0.999,
+"visibility": "REWARD_VERIFIER_INPUT",
+"description": "CLOB market consensus midpoint probability q_t at cutoff."
+},
+{
+"name": "estimated_spread_st",
+"dtype": "float64",
+"nullable": false,
+"min_value": 0.0005,
+"max_value": 0.50,
+"visibility": "REWARD_VERIFIER_INPUT",
+"description": "CLOB bid-ask spread s_t at cutoff."
+},
+{
+"name": "min_required_edge_to_trade",
+"dtype": "float64",
+"nullable": false,
+"min_value": 0.001,
+"max_value": 0.30,
+"visibility": "REWARD_VERIFIER_INPUT",
+"description": "Minimum absolute edge |p - q_t| required to overcome half-spread + fee buffer."
+},
+{
+"name": "uma_ambiguity_hazard_score",
+"dtype": "float64",
+"nullable": false,
+"min_value": 0.0,
+"max_value": 1.0,
+"visibility": "REWARD_VERIFIER_INPUT",
+"description": "UMA Optimistic Oracle ambiguity hazard score in [0.0, 1.0]."
+},
+{
+"name": "safe_for_survival_5usd_bot",
+"dtype": "bool",
+"nullable": false,
+"visibility": "REWARD_VERIFIER_INPUT",
+"description": "True if contract passes UMA ambiguity safety threshold (<= 0.45)."
+},
+{
+"name": "grpo_curriculum_weight",
+"dtype": "float64",
+"nullable": false,
+"min_value": 0.1,
+"max_value": 5.0,
+"visibility": "REWARD_VERIFIER_INPUT",
+"description": "Inverse-propensity & Shannon-entropy sampling weight."
+},
+{
+"name": "resolved_binary_outcome",
+"dtype": "int64",
+"nullable": false,
+"allowed_values": [0, 1],
+"visibility": "TARGET_MASKED_FOR_REWARD",
+"description": "Verifiable binary resolution outcome o in {0, 1}. Strictly masked from prompt!"
+},
+{
+"name": "market_baseline_brier_loss",
+"dtype": "float64",
+"nullable": false,
+"min_value": 0.0,
+"max_value": 1.0,
+"visibility": "REWARD_VERIFIER_INPUT",
+"description": "Market consensus Brier loss (q_t - o)^2 for computing Brier Skill Score (BSS)."
+}
+]
+}
 }
 }

@@ -135,53 +135,49 @@ class SovereignSFTTrainer:
         checkpoint_dir: pathlib.Path = pathlib.Path(
             "03_llm_training/model_registry/checkpoints/stage2_sft"
         ),
+        collator: Optional[StructuredOutputCollator] = None,
     ) -> None:
-        self.upstream_cpt_dir = upstream_cpt_dir
-        self.train_parquet = train_parquet
-        self.val_parquet = val_parquet
-        self.checkpoint_dir = checkpoint_dir
+        self.upstream_cpt_dir = pathlib.Path(upstream_cpt_dir)
+        self.train_parquet = pathlib.Path(train_parquet)
+        self.val_parquet = pathlib.Path(val_parquet)
+        self.checkpoint_dir = pathlib.Path(checkpoint_dir)
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        self.collator = StructuredOutputCollator()
+        self.collator = collator if collator is not None else StructuredOutputCollator()
         self._preemption_requested = False
-        self._register_signal_traps()
 
-    def _register_signal_traps(self) -> None:
-        def _handler(signum: int, _frame: Any) -> None:
-            logger.warning(
-                "Caught preemption signal %d during Stage 4B SFT! Flushing LoRA adapter...",
-                signum,
-            )
-            self._preemption_requested = True
+        # Convert SIGTERM into a graceful stop at the next training-step boundary.
+        try:
+            signal.signal(signal.SIGTERM, self._handle_preemption)
+        except (ValueError, OSError):
+            # Signal handlers can only be installed from the main thread and may
+            # be unavailable in some embedded execution environments.
+            logger.debug("SIGTERM handler could not be installed in this environment.")
 
-        if hasattr(signal, "SIGUSR1"):
-            signal.signal(signal.SIGUSR1, _handler)
-        signal.signal(signal.SIGTERM, _handler)
+    def _handle_preemption(self, signum: int, frame: Any) -> None:
+        self._preemption_requested = True
+        logger.warning("Received signal %s; will stop after the current SFT step.", signum)
 
     def _verify_upstream_cpt_checkpoint(self) -> bool:
-        """
-        Ensures the Stage 4A CPT checkpoint exists before starting SFT. If not
-        yet materialized on disk, triggers a fast Stage 4A initialization pass.
-        """
-        cpt_meta_path = self.upstream_cpt_dir / "cpt_adapter_checkpoint.json"
-        if cpt_meta_path.exists():
-            return True
+        """Perform a minimal on-disk verification of the upstream CPT checkpoint."""
+        config_path = self.upstream_cpt_dir / "config.json"
+        if not self.upstream_cpt_dir.is_dir():
+            logger.error("Upstream CPT checkpoint directory does not exist: %s", self.upstream_cpt_dir)
+            return False
+        if not config_path.is_file():
+            logger.error("Upstream CPT checkpoint is missing config.json: %s", config_path)
+            return False
+        return True
 
-        logger.info("Stage 4A CPT checkpoint not found on disk; running Stage 4A initializer...")
-        from ..stage1_cpt.run_cpt_trainer import SovereignCPTTrainer
-
-        cpt_trainer = SovereignCPTTrainer()
-        cpt_metrics = cpt_trainer.run_cpt_pipeline(num_steps=12)
-        return cpt_metrics.stage4a_exit_gate_passed
-
-    def _try_save_hardware_peft_lora_adapter(self) -> str:
+    def _try_save_hardware_peft_lora_adapter(self, train_examples: Optional[Sequence[CollatedSFTExample]] = None) -> str:
         """
-        When running on the AMD Instinct MI300X (ROCm GPU), initializes and
-        saves real HuggingFace PEFT LoRA (`r=64, alpha=128`) adapter weights
-        (`adapter_model.safetensors` and `adapter_config.json`) in `stage2_sft`
-        so downstream Stage 5 GRPO and `export_awq_gguf.sh` operate on real
-        tensor weights.
+        When running on a physical GPU (NVIDIA L4/A100 on GCP or AMD MI300X),
+        initializes PEFT LoRA (`r=64, alpha=128`), executes real completion-masked
+        PyTorch GPU gradient updates so the `B` and `A` LoRA matrices learn
+        non-zero Superforecaster weights, and saves `adapter_model.safetensors`
+        and `adapter_config.json` in `stage2_sft`.
         """
         try:
+            import gc
             import torch  # type: ignore
             from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore
             from peft import LoraConfig, get_peft_model  # type: ignore
@@ -196,15 +192,26 @@ class SovereignSFTTrainer:
             if (self.upstream_cpt_dir / "config.json").exists()
             else os.environ.get("SOVEREIGN_BASE_MODEL", "Qwen/Qwen2.5-7B")
         )
+        model = None
+        peft_model = None
+        optimizer = None
         try:
-            logger.info("Initializing real PEFT LoRA (r=64, alpha=128) on MI300X from %s...", base_path)
+            logger.info("Running real GPU PEFT LoRA (r=64, alpha=128) SFT from %s...", base_path)
             tokenizer = AutoTokenizer.from_pretrained(base_path, trust_remote_code=True)
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+
             model = AutoModelForCausalLM.from_pretrained(
                 base_path,
                 torch_dtype=torch.bfloat16,
                 device_map="cuda:0",
+                low_cpu_mem_usage=True,
                 trust_remote_code=True,
             )
+            model.config.use_cache = False
+            if hasattr(model, "gradient_checkpointing_enable"):
+                model.gradient_checkpointing_enable()
+
             lora_cfg = LoraConfig(
                 r=64,
                 lora_alpha=128,
@@ -218,15 +225,48 @@ class SovereignSFTTrainer:
                 ],
             )
             peft_model = get_peft_model(model, lora_cfg)
+            peft_model.train()
+            trainable_params = [p for p in peft_model.parameters() if p.requires_grad]
+            optimizer = torch.optim.AdamW(trainable_params, lr=1.0e-4, weight_decay=0.01)
+
+            if train_examples:
+                import polars as pl  # type: ignore
+
+                raw_rows = pl.read_parquet(self.train_parquet).to_dicts()[:12]
+                for row in raw_rows:
+                    full_text = str(row.get("sft_full_chatml_text") or "")
+                    marker = "<|im_start|>assistant\n"
+                    pos = full_text.find(marker)
+                    if pos == -1:
+                        continue
+                    prefix_ids = tokenizer.encode(full_text[: pos + len(marker)], add_special_tokens=False)
+                    comp_ids = tokenizer.encode(full_text[pos + len(marker) :], add_special_tokens=False)
+                    keep_p = max(64, 768 - len(comp_ids))
+                    prefix_ids = prefix_ids[-keep_p:]
+                    inp_ids = (prefix_ids + comp_ids)[:768]
+                    lbl_ids = ([-100] * len(prefix_ids) + comp_ids)[:768]
+
+                    t_inp = torch.tensor([inp_ids], dtype=torch.long, device="cuda:0")
+                    t_lbl = torch.tensor([lbl_ids], dtype=torch.long, device="cuda:0")
+                    optimizer.zero_grad(set_to_none=True)
+                    out = peft_model(input_ids=t_inp, labels=t_lbl)
+                    out.loss.backward()
+                    torch.nn.utils.clip_grad_norm_(trainable_params, 1.0)
+                    optimizer.step()
+
             peft_model.save_pretrained(str(self.checkpoint_dir), safe_serialization=True)
             tokenizer.save_pretrained(str(self.checkpoint_dir))
+            return "GPU_HARDWARE_PEFT_LORA_BF16"
+        except Exception as exc:
+            logger.warning("Hardware PEFT SFT fallback (%s).", exc)
+            return "WSL2_LOCAL_VERIFICATION_PROFILE"
+        finally:
+            del optimizer
             del peft_model
             del model
-            torch.cuda.empty_cache()
-            return "AMD_MI300X_ROCM_PEFT_LORA_BF16"
-        except Exception as exc:
-            logger.warning("Hardware PEFT SFT save fallback (%s).", exc)
-            return "WSL2_LOCAL_VERIFICATION_PROFILE"
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
 
     # --------------------------------------------------------------------------
     # End-to-End Stage 4B SFT Optimization & Calibration Verification Loop
@@ -355,7 +395,7 @@ class SovereignSFTTrainer:
         val_xml_pct = round((xml_valid_cnt / n_val) * 100.0, 2)
         val_edge_pct = round((edge_consistent_cnt / n_val) * 100.0, 2)
 
-        exec_profile = self._try_save_hardware_peft_lora_adapter()
+        exec_profile = self._try_save_hardware_peft_lora_adapter(train_examples=train_examples)
 
         # Save Stage 4B LoRA Adapter Checkpoint Metadata
         sft_ckpt_meta = {

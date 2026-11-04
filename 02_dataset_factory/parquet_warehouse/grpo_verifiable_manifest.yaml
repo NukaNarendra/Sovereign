@@ -1,106 +1,77 @@
+
 manifest_metadata:
-  source_project: SOVEREIGN PROBABILITY ENGINE
-  source_stage: 'STAGE 3: DATASET FACTORY (PART E)'
-  file_path: 02_dataset_factory/parquet_warehouse/grpo_verifiable_manifest.yaml
-  consumed_by: 03_llm_training/stage3_grpo_brier_edge/run_grpo_pipeline.py
-  target_policy_model: Stage 4B SFT-Adapted Qwen-2.5-7B
-  purpose: Declarative manifest for Stage 5 Group Relative Policy Optimization (GRPO) with Verifiable
-    Rewards (RLVR), combining Proper Brier Score calibration, CLOB spread-adjusted PnL edge, and XML format
-    compliance.
-  manifest_id: sovereign-stage5-grpo-verifiable-v1
-  schema_registry_ref: 02_dataset_factory/parquet_warehouse/schema_registry.json
-  dataset_tier_key: stage5_grpo_verifiable
-  training_stage: STAGE_5_GRPO_BRIER_AND_CLOB_EDGE_RL
-  upstream_sft_checkpoint_dir: 03_llm_training/model_registry/checkpoints/stage2_sft
-  target_hardware: AMD_Instinct_MI300X_192GB_HBM3_ROCm6.2
+  manifest_id: "sovereign-stage5-grpo-verifiable-v1"
+  schema_registry_ref: "02_dataset_factory/parquet_warehouse/schema_registry.json"
+  dataset_tier_key: "stage5_grpo_verifiable"
+  training_stage: "STAGE_5_GRPO_BRIER_AND_CLOB_EDGE_RL"
+  upstream_sft_checkpoint_dir: "03_llm_training/model_registry/checkpoints/stage2_sft"
+  target_hardware: "NVIDIA_L4_A100_CUDA_OR_AMD_MI300X"
   vllm_vram_allocation_ratio: 0.35
-  grpo_trainer_vram_allocation_ratio: 0.6
+  grpo_trainer_vram_allocation_ratio: 0.60
+
 parquet_shards:
   train:
-    directory: data/processed_warehouse/final_splits/grpo_verifiable
-    file_glob: train_grpo_shard_*.parquet
-    primary_shard: data/processed_warehouse/final_splits/grpo_verifiable/train_grpo_shard_00000.parquet
-    curriculum_weight_column: grpo_curriculum_weight
+    directory: "data/processed_warehouse/final_splits/grpo_verifiable"
+    file_glob: "train_grpo_shard_*.parquet"
+    primary_shard: "data/processed_warehouse/final_splits/grpo_verifiable/train_grpo_shard_00000.parquet"
+    curriculum_weight_column: "grpo_curriculum_weight"
+
   validation:
-    directory: data/processed_warehouse/final_splits/grpo_verifiable
-    file_glob: val_grpo_shard_*.parquet
-    primary_shard: data/processed_warehouse/final_splits/grpo_verifiable/val_grpo_shard_00000.parquet
-    curriculum_weight_column: grpo_curriculum_weight
+    directory: "data/processed_warehouse/final_splits/grpo_verifiable"
+    file_glob: "val_grpo_shard_*.parquet"
+    primary_shard: "data/processed_warehouse/final_splits/grpo_verifiable/val_grpo_shard_00000.parquet"
+    curriculum_weight_column: "grpo_curriculum_weight"
+
   test_out_of_time:
-    directory: data/processed_warehouse/final_splits/grpo_verifiable
-    file_glob: test_grpo_shard_*.parquet
-    primary_shard: data/processed_warehouse/final_splits/grpo_verifiable/test_grpo_shard_00000.parquet
-    curriculum_weight_column: grpo_curriculum_weight
+    directory: "data/processed_warehouse/final_splits/grpo_verifiable"
+    file_glob: "test_grpo_shard_*.parquet"
+    primary_shard: "data/processed_warehouse/final_splits/grpo_verifiable/test_grpo_shard_00000.parquet"
+    curriculum_weight_column: "grpo_curriculum_weight"
+
 column_role_mapping:
-  rollout_behavior:
-    note: During Stage 5 GRPO rollouts, vLLM receives only system_prompt and user_prompt. The seven verifier
-      columns below are passed to deterministic reward functions after the G=8 completions are generated.
   policy_rollout_inputs:
-    system_prompt_col: system_prompt
-    user_prompt_col: user_prompt
+    system_prompt_col: "system_prompt"
+    user_prompt_col: "user_prompt"
+
   verifiable_reward_columns:
-    ground_truth_outcome_o_col: resolved_binary_outcome
-    market_midpoint_qt_col: implied_prob_mid_qt
-    clob_spread_st_col: estimated_spread_st
-    min_edge_hurdle_col: min_required_edge_to_trade
-    uma_hazard_score_col: uma_ambiguity_hazard_score
-    survival_safe_flag_col: safe_for_survival_5usd_bot
-    market_baseline_brier_col: market_baseline_brier_loss
+    ground_truth_outcome_o_col: "resolved_binary_outcome"
+    market_midpoint_qt_col: "implied_prob_mid_qt"
+    clob_spread_st_col: "estimated_spread_st"
+    min_edge_hurdle_col: "min_required_edge_to_trade"
+    uma_hazard_score_col: "uma_ambiguity_hazard_score"
+    survival_safe_flag_col: "safe_for_survival_5usd_bot"
+    market_baseline_brier_col: "market_baseline_brier_loss"
+
 reward_function_specifications:
-  total_reward:
-    equation: R_total(p, q_t, s_t, o) = w_brier * R_brier(p, o) + w_edge * R_clob_edge(p, q_t, s_t, o)
-      + w_fmt * R_xml_format(response, p, q_t)
   brier_calibration_reward:
-    description: Proper Brier Score plus Log-Loss Tail Regularizer
-    implementation_file: brier_score_fn.py
-    module_path: 03_llm_training.stage3_grpo_brier_edge.brier_calibration_reward.brier_score_fn
-    equation: R_brier(p, o) = 1.0 - 4.0 * (p - o)^2
-    stated_properties:
-    - Maps p == q_t == 0.50 to R_brier = 0.0
-    - Maps a perfect prediction (p -> o) to R_brier = +1.0
-    - Maps a completely wrong prediction (|p - o| -> 1.0) to R_brier = -3.0
-    - 'Adds Brier Skill Score bonus: +0.50 * ((q_t - o)^2 - (p - o)^2)'
-    base_weight: 1.0
-    brier_skill_bonus_multiplier: 0.5
+    module_path: "03_llm_training.stage3_grpo_brier_edge.brier_calibration_reward.brier_score_fn"
+    base_weight: 1.00
+    brier_skill_bonus_multiplier: 1.50
     log_loss_epsilon_clamp: 0.001
-    log_loss_regularizer_weight: 0.1
+    log_loss_regularizer_weight: 0.10
+
   clob_spread_edge_reward:
-    description: CLOB Spread-Adjusted PnL Edge
-    implementation_file: spread_adjusted_pnl_fn.py
-    module_path: 03_llm_training.stage3_grpo_brier_edge.clob_spread_edge_reward.spread_adjusted_pnl_fn
-    activation_condition: abs(p - q_t) >= min_required_edge_to_trade
-    yes_trade:
-      condition: p - q_t >= min_edge
-      entry_price: ask_yes = q_t + s_t / 2
-      simulated_pnl: o - (q_t + s_t / 2 + fee_buffer)
-    no_trade:
-      condition: q_t - p >= min_edge
-      entry_price: ask_no = (1 - q_t) + s_t / 2
-      simulated_pnl: (1 - o) - ((1 - q_t) + s_t / 2 + fee_buffer)
-    penalties:
-      false_edge_overconfidence: Penalize false-edge overconfidence when abs(p - q_t) > s_t / 2 on high-hazard
-        UMA trap markets (safe_for_survival_5usd_bot == false).
-      overconfidence_spread_penalty: -0.35
-      uma_trap_trade_penalty: -0.5
+    module_path: "03_llm_training.stage3_grpo_brier_edge.clob_spread_edge_reward.spread_adjusted_pnl_fn"
     base_weight: 0.65
     fee_buffer_abs: 0.005
+    overconfidence_spread_penalty: -0.35
+    uma_trap_trade_penalty: -0.50
+
   format_validator_reward:
-    description: Strict XML Schema and Rubric Validator
-    implementation_file: xml_schema_reward.py
-    module_path: 03_llm_training.stage3_grpo_brier_edge.format_validator_reward.xml_schema_reward
-    expected_output_pattern: <reasoning>...</reasoning><prob>0.XXXX</prob><edge>+0.XXXX</edge>
-    algebraic_edge_check: abs((p - q_t) - edge) <= 0.0015
+    module_path: "03_llm_training.stage3_grpo_brier_edge.format_validator_reward.xml_schema_reward"
     base_weight: 0.35
     valid_xml_bonus: 0.25
-    algebraic_edge_match_bonus: 0.15
-    malformed_xml_hard_penalty: -1.5
+    algebraic_edge_match_bonus: 0.20
+    malformed_xml_hard_penalty: -1.50
+
 grpo_rollout_hyperparameters:
   num_generations_per_prompt_G: 8
   kl_divergence_beta: 0.04
-  temperature: 0.7
+  temperature: 0.70
   top_p: 0.95
   max_new_tokens: 640
+
 stage5_exit_gate_benchmarks:
   require_test_brier_lower_than_market_baseline: true
   max_allowed_expected_calibration_error_ece: 0.045
-  min_simulated_clob_sharpe_ratio: 1.5
+  min_simulated_clob_sharpe_ratio: 1.50

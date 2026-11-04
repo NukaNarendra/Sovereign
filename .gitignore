@@ -6,3 +6,27 @@ __pycache__/
 
 # Local backups
 remote_backup/
+# Environment files
+.env
+.env.*
+!.env.example
+
+# Python virtual environments
+.venv/
+venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Local data and logs
+data/
+logs/
+
+# Secret files
+00_infra_bootstrap/secrets_vault/*.json
+00_infra_bootstrap/secrets_vault/*.yaml
+
+# Local backups
+remote_backup/

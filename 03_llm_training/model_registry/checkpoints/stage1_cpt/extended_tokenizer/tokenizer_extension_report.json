@@ -1,6 +1,6 @@
 {
   "stage": "STAGE_4A_DOMAIN_TOKENIZER_EXTENDER",
-  "timestamp_utc": "2026-11-01T08:43:35.104993+00:00",
+  "timestamp_utc": "2026-11-04T19:00:01.335166+00:00",
   "base_model_id": "Qwen/Qwen2.5-7B",
   "tokenizer_mode": "DETERMINISTIC_QWEN2_5_COMPATIBLE",
   "original_vocab_size": 151646,

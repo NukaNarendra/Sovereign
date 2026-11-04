@@ -192,18 +192,26 @@ class LoRAWeightMerger:
             return False
 
         try:
+            import gc
             import torch  # type: ignore
             from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore
             from peft import PeftModel  # type: ignore
 
+            base_source = (
+                str(self.cpt_dir)
+                if (self.cpt_dir / "config.json").exists()
+                else os.environ.get("SOVEREIGN_BASE_MODEL", "Qwen/Qwen2.5-7B")
+            )
             logger.info(
-                "Detected hardware PEFT safetensors at %s; executing MI300X BF16 merge_and_unload()...",
+                "Detected hardware PEFT safetensors at %s; executing BF16 merge_and_unload() from %s...",
                 adapter_safetensors,
+                base_source,
             )
             base_model = AutoModelForCausalLM.from_pretrained(
-                str(self.cpt_dir),
+                base_source,
                 torch_dtype=torch.bfloat16,
                 device_map="auto",
+                low_cpu_mem_usage=True,
                 trust_remote_code=True,
             )
             peft_model = PeftModel.from_pretrained(base_model, str(self.grpo_dir))
@@ -211,10 +219,23 @@ class LoRAWeightMerger:
             merged_model.save_pretrained(
                 str(self.merged_dir), safe_serialization=True, max_shard_size="4GB"
             )
-            tok = AutoTokenizer.from_pretrained(
-                str(self.cpt_dir / "extended_tokenizer"), trust_remote_code=True
+            tok_source = (
+                str(self.grpo_dir)
+                if (self.grpo_dir / "tokenizer.json").exists()
+                else (
+                    str(self.cpt_dir / "extended_tokenizer")
+                    if (self.cpt_dir / "extended_tokenizer" / "tokenizer.json").exists()
+                    else base_source
+                )
             )
+            tok = AutoTokenizer.from_pretrained(tok_source, trust_remote_code=True)
             tok.save_pretrained(str(self.merged_dir))
+            del merged_model
+            del peft_model
+            del base_model
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
             return True
         except Exception as exc:
             logger.warning(
@@ -295,44 +316,56 @@ class LoRAWeightMerger:
             for idx, mod in enumerate(self.TARGET_MODULES)
         ]
 
-        # Write HuggingFace / Fireworks AI compatible model config.json
-        hf_config = {
-            "architectures": ["Qwen2ForCausalLM"],
-            "model_type": "qwen2",
-            "torch_dtype": "bfloat16",
-            "vocab_size": 151744,
-            "hidden_size": 3584,
-            "intermediate_size": 18944,
-            "num_hidden_layers": 28,
-            "num_attention_heads": 28,
-            "num_key_value_heads": 4,
-            "max_position_embeddings": 32768,
-            "rms_norm_eps": 1e-06,
-            "rope_theta": 1000000.0,
-            "sovereign_grpo_policy_weights": policy_weights,
-        }
         config_path = self.merged_dir / "config.json"
-        config_path.write_text(json.dumps(hf_config, indent=2), encoding="utf-8")
-
-        # Write safetensors index manifest
-        safetensors_index = {
-            "metadata": {
-                "total_size": 15234568192,
-                "format": "pt",
-                "precision": "BF16",
-                "merged_stages": ["STAGE_4A_CPT", "STAGE_4B_SFT", "STAGE_5_GRPO"],
-            },
-            "weight_map": {
-                "model.embed_tokens.weight": "model-00001-of-00004.safetensors",
-                "model.layers.0.self_attn.q_proj.weight": "model-00001-of-00004.safetensors",
-                "lm_head.weight": "model-00004-of-00004.safetensors",
-            },
-            "sovereign_bayesian_weights": policy_weights,
-        }
         index_path = self.merged_dir / "model.safetensors.index.json"
-        index_bytes = json.dumps(safetensors_index, indent=2).encode("utf-8")
-        index_path.write_bytes(index_bytes)
-        digest = hashlib.sha256(index_bytes).hexdigest()
+
+        # CRITICAL FIX: Only write synthetic config.json and model.safetensors.index.json
+        # when running in WSL2 preflight mode (`not hw_merged`). When `hw_merged` is True,
+        # preserve the real 28-layer Qwen-2.5-7B `config.json` and `model.safetensors.index.json`
+        # written by `save_pretrained()` so `convert_hf_to_gguf.py` converts all 339 tensors!
+        if hw_merged and config_path.exists():
+            real_cfg = json.loads(config_path.read_text(encoding="utf-8"))
+            real_cfg["sovereign_grpo_policy_weights"] = policy_weights
+            config_path.write_text(json.dumps(real_cfg, indent=2), encoding="utf-8")
+            if index_path.exists():
+                digest = hashlib.sha256(index_path.read_bytes()).hexdigest()
+            else:
+                digest = hashlib.sha256(config_path.read_bytes()).hexdigest()
+        else:
+            hf_config = {
+                "architectures": ["Qwen2ForCausalLM"],
+                "model_type": "qwen2",
+                "torch_dtype": "bfloat16",
+                "vocab_size": 151744,
+                "hidden_size": 3584,
+                "intermediate_size": 18944,
+                "num_hidden_layers": 28,
+                "num_attention_heads": 28,
+                "num_key_value_heads": 4,
+                "max_position_embeddings": 32768,
+                "rms_norm_eps": 1e-06,
+                "rope_theta": 1000000.0,
+                "sovereign_grpo_policy_weights": policy_weights,
+            }
+            config_path.write_text(json.dumps(hf_config, indent=2), encoding="utf-8")
+
+            safetensors_index = {
+                "metadata": {
+                    "total_size": 15234568192,
+                    "format": "pt",
+                    "precision": "BF16",
+                    "merged_stages": ["STAGE_4A_CPT", "STAGE_4B_SFT", "STAGE_5_GRPO"],
+                },
+                "weight_map": {
+                    "model.embed_tokens.weight": "model-00001-of-00004.safetensors",
+                    "model.layers.0.self_attn.q_proj.weight": "model-00001-of-00004.safetensors",
+                    "lm_head.weight": "model-00004-of-00004.safetensors",
+                },
+                "sovereign_bayesian_weights": policy_weights,
+            }
+            index_bytes = json.dumps(safetensors_index, indent=2).encode("utf-8")
+            index_path.write_bytes(index_bytes)
+            digest = hashlib.sha256(index_bytes).hexdigest()
 
         manifest = MergedModelManifest(
             stage="STAGE_5_PART_B_MERGE_LORA_ADAPTERS",

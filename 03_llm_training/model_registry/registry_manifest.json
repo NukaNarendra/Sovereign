@@ -1,61 +1,47 @@
 {
-  "registry_version": "1.0.0-sovereign-stage5-complete",
-  "updated_at_utc": "2026-11-01T08:45:15.805205+00:00",
-  "active_production_model": {
-    "model_name": "Sovereign-Prob-7B-GRPO-v1",
-    "base_model": "Qwen/Qwen2.5-7B",
-    "extended_vocab_size": 151744,
-    "learned_bayesian_policy_weights": {
-      "w_extremizing_slope": 0.28,
-      "w_momentum_24h": 0.26,
-      "w_obi_imbalance": 0.025,
-      "w_micro_price": 0.45,
-      "w_base_rate_anchor": 0.0,
-      "w_uma_trap_dampener": 0.15,
-      "w_spread_discipline_gate": 1.15,
-      "w_platt_log_odds_gain": 2.35
-    },
-    "out_of_time_test_brier_score": 0.006969,
-    "market_baseline_test_brier_score": 0.044207,
-    "out_of_time_brier_skill_score_bss": 0.8424
-  },
-  "inference_routing_tiers": {
-    "primary_serverless_tier": {
-      "stage": "STAGE_5_FIREWORKS_UPLOAD_DEPLOYER",
-      "timestamp_utc": "2026-11-01T08:45:15.805205+00:00",
-      "deployment_mode": "STAGE5_OFFLINE_PACKAGE_VERIFIED",
-      "fireworks_account_id": "sovereign-prob-engine",
-      "deployed_model_id": "accounts/sovereign-prob-engine/models/qwen2p5-7b-polymarket-grpo-v1",
-      "base_model_architecture": "Qwen/Qwen2.5-7B",
-      "lora_rank_r": 64,
-      "lora_alpha": 128,
-      "extended_vocab_size": 151744,
-      "serverless_endpoint_url": "https://api.fireworks.ai/inference/v1/chat/completions",
-      "initial_credit_pool_usd": 50.0,
-      "safety_fallback_buffer_usd": 1.5,
-      "estimated_cost_per_forecast_usd": 0.0003,
-      "estimated_forecasts_covered_by_credit": 161666,
-      "local_gguf_fallback_path": "03_llm_training/model_registry/checkpoints/quantized_gguf_q4_k_m/sovereign-prob-7b-q4_k_m.gguf",
-      "package_sha256_digest": "a00faff21c427e55e7bf37791aaa1797f41fcf2f3a74eeb1ebbe905f7c1d8088",
-      "deployment_ready_for_stage6_mcp": true
-    },
-    "local_survival_fallback_tier": {
-      "stage": "STAGE_5_PART_B_AWQ_4BIT_AND_GGUF_QUANTIZER",
-      "timestamp_utc": "2026-11-01T08:45:15.272177+00:00",
-      "upstream_merged_bf16_dir": "03_llm_training/model_registry/checkpoints/merged_bf16",
-      "calibration_prompts_used": 128,
-      "quantization_group_size": 128,
-      "zero_point_enabled": true,
-      "unquantized_bf16_size_gb": 15.24,
-      "quantized_4bit_awq_size_gb": 4.35,
-      "quantized_gguf_q4_k_m_size_gb": 4.58,
-      "compression_ratio_x": 3.5,
-      "awq_vs_rtn_mse_reduction_pct": -570.37,
-      "post_quant_test_brier_drift": 0.00014,
-      "gguf_binary_magic_header_verified": true,
-      "quantization_exit_gate_passed": true,
-      "awq_output_dir": "03_llm_training/model_registry/checkpoints/quantized_awq_4bit",
-      "gguf_output_path": "03_llm_training/model_registry/checkpoints/quantized_gguf_q4_k_m/sovereign-prob-7b-q4_k_m.gguf"
-    }
-  }
+"_comment_header": "",
+"_comment_project": "SOVEREIGN PROBABILITY ENGINE — STAGE 5: MODEL REGISTRY MANIFEST",
+"_comment_file": "03_llm_training/model_registry/registry_manifest.json",
+"_comment_consumed_by": "04_mcp_runtime/inference_router/hybrid_model_router.py",
+"_comment_footer": "",
+"registry_version": "1.0.0-sovereign-stage5-complete",
+"active_production_model": {
+"model_name": "Sovereign-Prob-7B-GRPO-v1",
+"base_model": "Qwen/Qwen2.5-7B",
+"extended_vocab_size": 151744,
+"learned_bayesian_policy_weights": {
+"w_extremizing_slope": 0.28,
+"w_momentum_24h": 0.26,
+"w_obi_imbalance": 0.025,
+"w_micro_price": 0.45,
+"w_base_rate_anchor": 0.0,
+"w_uma_trap_dampener": 0.15,
+"w_spread_discipline_gate": 1.15,
+"w_platt_log_odds_gain": 2.35
+},
+"checkpoints": {
+"stage1_cpt_dir": "03_llm_training/model_registry/checkpoints/stage1_cpt",
+"stage2_sft_dir": "03_llm_training/model_registry/checkpoints/stage2_sft",
+"stage3_grpo_dir": "03_llm_training/model_registry/checkpoints/stage3_grpo",
+"merged_bf16_dir": "03_llm_training/model_registry/checkpoints/merged_bf16",
+"quantized_awq_4bit_dir": "03_llm_training/model_registry/checkpoints/quantized_awq_4bit",
+"quantized_gguf_q4_k_m_path": "03_llm_training/model_registry/checkpoints/quantized_gguf_q4_k_m/sovereign-prob-7b-q4_k_m.gguf"
+}
+},
+"inference_routing_tiers": {
+"primary_serverless_tier": {
+"deployed_model_id": "accounts/sovereign-prob-engine/models/qwen2p5-7b-polymarket-grpo-v1",
+"serverless_endpoint_url": "https://api.fireworks.ai/inference/v1/chat/completions"
+},
+"local_survival_fallback_tier": {
+"gguf_output_path": "03_llm_training/model_registry/checkpoints/quantized_gguf_q4_k_m/sovereign-prob-7b-q4_k_m.gguf"
+}
+},
+"inference_routing_policy": {
+"primary_provider": "FIREWORKS_AI_SERVERLESS_50USD_CREDIT",
+"primary_endpoint": "https://api.fireworks.ai/inference/v1/chat/completions",
+"primary_model_id": "accounts/sovereign-prob-engine/models/qwen2p5-7b-polymarket-grpo-v1",
+"fallback_provider": "LOCAL_LLAMA_CPP_Q4_K_M_GGUF",
+"credit_safety_buffer_usd": 1.50
+}
 }

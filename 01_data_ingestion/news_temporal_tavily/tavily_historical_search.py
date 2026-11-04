@@ -38,7 +38,7 @@ import pathlib
 import argparse
 import datetime
 from dataclasses import dataclass, asdict
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import httpx
 

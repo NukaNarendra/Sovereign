@@ -39,7 +39,7 @@ import pathlib
 import argparse
 import datetime
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from .clob_v2_rest_client import (
     ClobV2ClientConfig,
