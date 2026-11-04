@@ -1,0 +1,110 @@
+# Sovereign Probability Engine — Stage 3: Dataset Factory (Part E)
+# Consumed by: 03_llm_training/stage2_sft/run_sft_trainer.py
+# Target base checkpoint: Stage 4A CPT-adapted Qwen-2.5-7B
+# Purpose: Manifest for Stage 4B SFT on verified blind 5-step Philip Tetlock
+#          Superforecaster chain-of-thought traces.
+
+manifest_metadata:
+  manifest_id: "sovereign-stage4b-sft-reasoning-v1"
+  schema_registry_ref: "02_dataset_factory/parquet_warehouse/schema_registry.json"
+  dataset_tier_key: "stage4b_sft_reasoning"
+  training_stage: "STAGE_4B_SUPERVISED_FINETUNING"
+  upstream_checkpoint_dir: "03_llm_training/model_registry/checkpoints/stage1_cpt"
+  teacher_credit_source: "Merge Gateway ($10/mo Student Perk) + Deterministic Bayesian Synthesizer"
+  hindsight_filter_certificate: "VERIFIED_BLIND_SUPERFORECASTER"
+
+# 1. Partitioned Parquet shard locations (train / validation / test)
+parquet_shards:
+  train:
+    directory: "data/processed_warehouse/final_splits/sft_reasoning"
+    file_glob: "train_sft_shard_*.parquet"
+    primary_shard: "data/processed_warehouse/final_splits/sft_reasoning/train_sft_shard_00000.parquet"
+    system_column: "system_prompt"
+    prompt_column: "user_prompt"
+    completion_column: "assistant_response"
+    full_chatml_column: "sft_full_chatml_text"
+    quality_cert_column: "sft_quality_certificate"
+
+  validation:
+    directory: "data/processed_warehouse/final_splits/sft_reasoning"
+    file_glob: "val_sft_shard_*.parquet"
+    primary_shard: "data/processed_warehouse/final_splits/sft_reasoning/val_sft_shard_00000.parquet"
+    system_column: "system_prompt"
+    prompt_column: "user_prompt"
+    completion_column: "assistant_response"
+    full_chatml_column: "sft_full_chatml_text"
+    quality_cert_column: "sft_quality_certificate"
+
+  test_out_of_time:
+    directory: "data/processed_warehouse/final_splits/sft_reasoning"
+    file_glob: "test_sft_shard_*.parquet"
+    primary_shard: "data/processed_warehouse/final_splits/sft_reasoning/test_sft_shard_00000.parquet"
+    system_column: "system_prompt"
+    prompt_column: "user_prompt"
+    completion_column: "assistant_response"
+    full_chatml_column: "sft_full_chatml_text"
+    quality_cert_column: "sft_quality_certificate"
+
+# 2. Completion-only loss masking contract
+completion_loss_masking:
+  instruction_template: "<|im_start|>user\n"
+  response_template: "<|im_start|>assistant\n"
+  ignore_index_label: -100
+  max_seq_length_tokens: 4096
+  truncation_side: "left"
+  padding_side: "right"
+
+# Upweight numeric 0.XXXX and +0.XXXX spans for exact 4-decimal arithmetic.
+token_level_loss_weights:
+  reasoning_trace_tokens_weight: 1.00
+  xml_delimiter_tags_weight: 1.50
+  numeric_prob_and_edge_tokens_weight: 2.00
+
+# 3. Five-step Tetlock Superforecaster reasoning rubric contract
+superforecaster_rubric_steps:
+  step_1_outside_view:
+    header_tag: "1. [Outside View & Base Rate Prior]:"
+    required_concepts:
+      - "historical YES resolution base rate"
+      - "live CLOB midpoint q_t"
+      - "horizon T-Xh prior to close"
+
+  step_2_uma_oracle_audit:
+    header_tag: "2. [UMA Optimistic Oracle Rule & Hazard Audit]:"
+    required_concepts:
+      - "ambiguity hazard score"
+      - "survival-bot eligibility"
+      - "primary resolution source / timezone"
+
+  step_3_clob_microstructure:
+    header_tag: "3. [L2 Order Book & Whale Microstructure]:"
+    required_concepts:
+      - "bid-ask spread s_t"
+      - "minimum edge hurdle"
+      - "micro-price and Order Book Imbalance OBI"
+
+  step_4_inside_view_catalysts:
+    header_tag: "4. [Inside View & Pre-Cutoff Catalysts]:"
+    required_concepts:
+      - "pre-cutoff news wire"
+      - "macro calendar / social velocity telemetry"
+
+  step_5_bayesian_synthesis:
+    header_tag: "5. [Bayesian Calibration & Execution Gate]:"
+    required_concepts:
+      - "calibrated probability p"
+      - "signed net edge (p - q_t)"
+      - "Recommended Action (MAKER_LIMIT_BUY_YES / MAKER_LIMIT_BUY_NO / HOLD / PASS)"
+
+# 4. Strict output XML schema and Stage 4B exit-gate criteria
+output_xml_contract:
+  # Preserved from the supplied specification; check regex semantics before training.
+  validation_regex: '(?P.?)\s(?P[0-9.]+)\s*(?P[+-]?[0-9.]+)'
+  prob_min_bound: 0.0001
+  prob_max_bound: 0.9999
+  max_algebraic_edge_error: 0.0015
+
+stage4b_exit_gate:
+  min_val_xml_schema_compliance_pct: 99.0
+  min_val_algebraic_edge_consistency_pct: 98.0
+  checkpoint_output_dir: "03_llm_training/model_registry/checkpoints/stage2_sft"

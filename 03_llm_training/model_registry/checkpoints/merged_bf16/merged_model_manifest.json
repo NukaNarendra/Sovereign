@@ -1,0 +1,97 @@
+{
+  "stage": "STAGE_5_PART_B_MERGE_LORA_ADAPTERS",
+  "timestamp_utc": "2026-11-01T08:45:14.337596+00:00",
+  "execution_mode": "WSL2_DETERMINISTIC_RSLORA_FUSION_VERIFIED",
+  "model_id": "sovereign-quant/Sovereign-Prob-7B-GRPO-BF16",
+  "base_architecture": "Qwen/Qwen2.5-7B",
+  "extended_vocab_size_aligned": 151744,
+  "stage4a_cpt_gate_verified": true,
+  "stage4b_sft_gate_verified": true,
+  "stage5_grpo_gate_verified": true,
+  "all_upstream_gates_passed": true,
+  "rslora_scaling_factor": 16.0,
+  "learned_bayesian_policy_weights": {
+    "w_extremizing_slope": 0.28,
+    "w_momentum_24h": 0.26,
+    "w_obi_imbalance": 0.025,
+    "w_micro_price": 0.45,
+    "w_base_rate_anchor": 0.0,
+    "w_uma_trap_dampener": 0.15,
+    "w_spread_discipline_gate": 1.15,
+    "w_platt_log_odds_gain": 2.35
+  },
+  "merged_modules_audited": [
+    {
+      "module_name": "q_proj",
+      "lora_rank_r": 64,
+      "rslora_scaling_factor": 16.0,
+      "base_weight_frobenius_norm": 3.62574,
+      "sft_delta_frobenius_norm": 0.25347,
+      "grpo_delta_frobenius_norm": 0.15558,
+      "merged_weight_frobenius_norm": 3.64947,
+      "no_nan_or_inf_verified": true
+    },
+    {
+      "module_name": "k_proj",
+      "lora_rank_r": 64,
+      "rslora_scaling_factor": 16.0,
+      "base_weight_frobenius_norm": 3.68575,
+      "sft_delta_frobenius_norm": 0.25347,
+      "grpo_delta_frobenius_norm": 0.1556,
+      "merged_weight_frobenius_norm": 3.71669,
+      "no_nan_or_inf_verified": true
+    },
+    {
+      "module_name": "v_proj",
+      "lora_rank_r": 64,
+      "rslora_scaling_factor": 16.0,
+      "base_weight_frobenius_norm": 3.55963,
+      "sft_delta_frobenius_norm": 0.25347,
+      "grpo_delta_frobenius_norm": 0.15563,
+      "merged_weight_frobenius_norm": 3.58307,
+      "no_nan_or_inf_verified": true
+    },
+    {
+      "module_name": "o_proj",
+      "lora_rank_r": 64,
+      "rslora_scaling_factor": 16.0,
+      "base_weight_frobenius_norm": 3.60455,
+      "sft_delta_frobenius_norm": 0.25347,
+      "grpo_delta_frobenius_norm": 0.15569,
+      "merged_weight_frobenius_norm": 3.61036,
+      "no_nan_or_inf_verified": true
+    },
+    {
+      "module_name": "gate_proj",
+      "lora_rank_r": 64,
+      "rslora_scaling_factor": 16.0,
+      "base_weight_frobenius_norm": 3.69306,
+      "sft_delta_frobenius_norm": 0.25347,
+      "grpo_delta_frobenius_norm": 0.15577,
+      "merged_weight_frobenius_norm": 3.68723,
+      "no_nan_or_inf_verified": true
+    },
+    {
+      "module_name": "up_proj",
+      "lora_rank_r": 64,
+      "rslora_scaling_factor": 16.0,
+      "base_weight_frobenius_norm": 3.57481,
+      "sft_delta_frobenius_norm": 0.25346,
+      "grpo_delta_frobenius_norm": 0.15588,
+      "merged_weight_frobenius_norm": 3.57202,
+      "no_nan_or_inf_verified": true
+    },
+    {
+      "module_name": "down_proj",
+      "lora_rank_r": 64,
+      "rslora_scaling_factor": 16.0,
+      "base_weight_frobenius_norm": 3.5845,
+      "sft_delta_frobenius_norm": 0.25346,
+      "grpo_delta_frobenius_norm": 0.15601,
+      "merged_weight_frobenius_norm": 3.59684,
+      "no_nan_or_inf_verified": true
+    }
+  ],
+  "merged_checkpoint_dir": "03_llm_training/model_registry/checkpoints/merged_bf16",
+  "safetensors_manifest_sha256": "fc693f945417014e99df02aa74027d6a6e6c4e5778ec5ba6ee4d3342448b2995"
+}

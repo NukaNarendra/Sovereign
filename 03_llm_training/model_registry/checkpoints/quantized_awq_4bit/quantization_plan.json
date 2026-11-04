@@ -1,0 +1,27 @@
+{
+  "status": "PLAN_ONLY_NOT_MODEL_QUANTIZED",
+  "quant_method_requested": "awq",
+  "zero_point": true,
+  "q_group_size": 128,
+  "w_bit": 4,
+  "version": "GEMM",
+  "modules_to_not_convert": [
+    "embed_tokens",
+    "lm_head"
+  ],
+  "calibration_samples_available": 2800,
+  "calibration_samples_requested": 128,
+  "calibration_samples_counted": 128,
+  "calibration_dataset": "/mnt/c/Narendra/python_files/projects/Sovereign-Prob-7B/data/processed_warehouse/final_splits/grpo_verifiable/train_grpo_shard_00000.parquet",
+  "learned_bayesian_policy_weights": {
+    "w_extremizing_slope": 0.28,
+    "w_momentum_24h": 0.26,
+    "w_obi_imbalance": 0.025,
+    "w_micro_price": 0.45,
+    "w_base_rate_anchor": 0.0,
+    "w_uma_trap_dampener": 0.15,
+    "w_spread_discipline_gate": 1.15,
+    "w_platt_log_odds_gain": 2.35
+  },
+  "note": "This file records a quantization plan. It does not contain quantized AWQ model weights."
+}

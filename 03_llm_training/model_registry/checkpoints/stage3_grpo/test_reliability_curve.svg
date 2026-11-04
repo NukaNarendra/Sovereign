@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 500 500" width="500" height="500">
+  <rect width="500" height="500" fill="#0f172a" />
+  <text x="250" y="30" fill="#f8fafc" font-family="monospace" font-size="13" text-anchor="middle">Sovereign-Prob-7B Out-of-Time Reliability (ECE=0.0303, Brier=0.0070 vs Mkt=0.0442)</text>
+  <line x1="60" y1="440" x2="440" y2="60" stroke="#64748b" stroke-dasharray="6,6" stroke-width="2" />
+  <polyline fill="none" stroke="#10b981" stroke-width="3" points="65,440 111,440 164,440 188,440 227,60 254,278 315,60 349,60 388,60 433,60" />
+</svg>

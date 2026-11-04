@@ -1,0 +1,96 @@
+# ==============================================================================
+# SOVEREIGN PROBABILITY ENGINE — STAGE 3: DATASET FACTORY (PART E)
+#
+# Intended path: 02_dataset_factory/parquet_warehouse/cpt_corpus_manifest.yaml
+# Consumed by: 03_llm_training/stage1_cpt/run_cpt_trainer.py
+# Target base model: Qwen/Qwen2.5-7B
+# Target hardware: 192 GB AMD Instinct MI300X, ROCm 6.2
+#
+# Purpose: Declarative manifest defining Stage 4A continual-pretraining Parquet
+# shards, custom domain special tokens, sequence-packing strategy, and
+# domain-curriculum sampling weights.
+# ==============================================================================
+
+manifest_metadata:
+  manifest_id: "sovereign-stage4a-cpt-corpus-v1"
+  schema_registry_ref: "02_dataset_factory/parquet_warehouse/schema_registry.json"
+  dataset_tier_key: "stage4a_cpt_corpus"
+  training_stage: "STAGE_4A_CONTINUAL_PRETRAINING"
+  base_model_architecture: "Qwen/Qwen2.5-7B"
+  target_hardware: "AMD_Instinct_MI300X_192GB_HBM3_ROCm6.2"
+  zero_future_leak_certified: true
+  created_for_pipeline: "sovereign-prob-engine"
+
+# ==============================================================================
+# 1. PARTITIONED PARQUET SHARD LOCATIONS (TRAIN / VAL / TEST)
+# ==============================================================================
+
+parquet_shards:
+  train:
+    directory: "data/processed_warehouse/final_splits/cpt_corpus"
+    file_glob: "train_cpt_shard_*.parquet"
+    primary_shard: "data/processed_warehouse/final_splits/cpt_corpus/train_cpt_shard_00000.parquet"
+    text_column: "cpt_unsupervised_text"
+    token_count_column: "estimated_prompt_tokens"
+    category_column: "canonical_category"
+    shuffle_buffer_size: 10000
+    seed: 42
+
+  validation:
+    directory: "data/processed_warehouse/final_splits/cpt_corpus"
+    file_glob: "val_cpt_shard_*.parquet"
+    primary_shard: "data/processed_warehouse/final_splits/cpt_corpus/val_cpt_shard_00000.parquet"
+    text_column: "cpt_unsupervised_text"
+    token_count_column: "estimated_prompt_tokens"
+    category_column: "canonical_category"
+    shuffle_buffer_size: 0
+
+  test_out_of_time:
+    directory: "data/processed_warehouse/final_splits/cpt_corpus"
+    file_glob: "test_cpt_shard_*.parquet"
+    primary_shard: "data/processed_warehouse/final_splits/cpt_corpus/test_cpt_shard_00000.parquet"
+    text_column: "cpt_unsupervised_text"
+    token_count_column: "estimated_prompt_tokens"
+    category_column: "canonical_category"
+    shuffle_buffer_size: 0
+
+# ==============================================================================
+# 2. CUSTOM PREDICTION-MARKET DOMAIN VOCABULARY EXTENSION TOKENS
+#
+# Registered in: 03_llm_training/stage1_cpt/domain_tokenizer_extender.py
+# Empty-string entries below preserve blank token placeholders from the source
+# text. Replace them with the intended token strings before production training.
+# ==============================================================================
+
+domain_special_tokens:
+  xml_structural_tags:
+    - "<market_meta>"
+    - "</market_meta>"
+    - ""
+    - ""
+    - "<uma_rule>"
+    - "</uma_rule>"
+    - ""
+    - ""
+    - ""
+    - ""
+    - "<whale_flow>"
+    - "</whale_flow>"
+    - "<macro_calendar>"
+    - "</macro_calendar>"
+    - "<social_pulse>"
+    - "</social_pulse>"
+    - "<news_context>"
+    - "</news_context>"
+    - ""
+    - ""
+    - ""
+    - ""
+    - ""
+    - ""
+
+  microstructure_and_regime_tokens:
+    - "[HORIZON:HORIZON_30D_MACRO_STRUCTURAL]"
+    - "[HORIZON:HORIZON_7D_SWING_CATALYST]"
+    - "[HORIZON:HORIZON_72H_PRE_EVENT]"
+    - "[HORIZON:HORIZON_24H_ACTIVE_BOOK]"

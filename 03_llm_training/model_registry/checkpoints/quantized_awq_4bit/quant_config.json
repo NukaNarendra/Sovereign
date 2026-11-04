@@ -1,0 +1,22 @@
+{
+  "quant_method": "awq",
+  "zero_point": true,
+  "q_group_size": 128,
+  "w_bit": 4,
+  "version": "GEMM",
+  "modules_to_not_convert": [
+    "embed_tokens",
+    "lm_head"
+  ],
+  "calibration_samples": 128,
+  "sovereign_grpo_policy_weights": {
+    "w_extremizing_slope": 0.28,
+    "w_momentum_24h": 0.26,
+    "w_obi_imbalance": 0.025,
+    "w_micro_price": 0.45,
+    "w_base_rate_anchor": 0.0,
+    "w_uma_trap_dampener": 0.15,
+    "w_spread_discipline_gate": 1.15,
+    "w_platt_log_odds_gain": 2.35
+  }
+}

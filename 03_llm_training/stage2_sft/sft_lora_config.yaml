@@ -1,0 +1,168 @@
+# =============================================================================
+# SOVEREIGN PROBABILITY ENGINE — STAGE 4B: SUPERVISED FINE-TUNING (SFT)
+# Consumed by: 03_llm_training/stage2_sft/run_sft_trainer.py
+#
+# IMPORTANT IMPLEMENTATION CONTRACTS
+# - The trainer must implement per-token weighted cross-entropy; these YAML
+#   weights are not applied by an ordinary labels-only Hugging Face collator.
+# - Register/resize the tokenizer vocabulary before attaching PEFT adapters.
+# - modules_to_save trains/saves the named modules as whole modules; it does
+#   not restrict updates to only the 43 newly added token rows.
+# =============================================================================
+
+stage_metadata:
+  stage_name: "STAGE_4B_SUPERVISED_FINETUNING"
+  stage_id: "sovereign-stage4b-sft-lora-v1"
+  model_family: "Qwen2.5-7B"
+  upstream_cpt_checkpoint_dir: "03_llm_training/model_registry/checkpoints/stage1_cpt"
+  upstream_cpt_gate_certificate: "03_llm_training/model_registry/checkpoints/stage1_cpt/stage4a_cpt_gate_certificate.json"
+  sft_warehouse_manifest: "02_dataset_factory/parquet_warehouse/sft_reasoning_manifest.yaml"
+  output_checkpoint_dir: "03_llm_training/model_registry/checkpoints/stage2_sft"
+  gate_certificate_output_path: "03_llm_training/model_registry/checkpoints/stage2_sft/stage4b_sft_gate_certificate.json"
+  seed: 42
+
+vocabulary_extension:
+  expected_new_token_count: 43
+  register_tokens_before_peft_wrap: true
+  resize_model_embeddings_after_tokenizer_update: true
+  verify_tokenizer_and_model_vocab_sizes_match: true
+  required_structural_tokens:
+    - "<reasoning>"
+    - "</reasoning>"
+    - "<prob>"
+    - "</prob>"
+    - "<edge>"
+    - "</edge>"
+  # The full 43-token list should be managed by the tokenizer/dataset code.
+  fail_if_expected_token_count_mismatches: true
+
+peft_lora_architecture:
+  peft_type: "LORA"
+  task_type: "CAUSAL_LM"
+  lora_r: 64
+  lora_alpha: 128
+  lora_dropout: 0.05
+  bias: "none"
+  # False gives the stated classic-LoRA scale alpha/r = 128/64 = 2.0.
+  # If enabled, rsLoRA uses alpha/sqrt(r) = 16.0 for these same values.
+  use_rslora: false
+  use_dora: false
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+  # These are whole trainable/saved modules, not only the added-token rows.
+  modules_to_save:
+    - "embed_tokens"
+    - "lm_head"
+
+completion_masking_and_weighting:
+  instruction_marker: "<|im_start|>user\n"
+  response_marker: "<|im_start|>assistant\n"
+  eos_marker: "<|im_end|>"
+  ignore_index_label: -100
+  max_seq_length: 4096
+  truncation_side: "left"
+  padding_side: "right"
+  require_prompt_tokens_masked: true
+  require_assistant_completion_present: true
+  weighted_loss_implementation: "custom_per_token_weighted_causal_lm_cross_entropy"
+  token_loss_multipliers:
+    masked_prompt_tokens: 0.0
+    reasoning_prose_tokens: 1.0
+    xml_structural_tag_tokens: 1.5
+    numeric_prob_and_edge_tokens: 2.0
+  structural_tags_for_weighting:
+    - "<reasoning>"
+    - "</reasoning>"
+    - "<prob>"
+    - "</prob>"
+    - "<edge>"
+    - "</edge>"
+  numeric_span_pattern: '(?<!\w)[+-]?\d+\.\d{4}(?!\w)'
+  numeric_weighting_unit: "all_token_pieces_overlapping_numeric_span"
+  weighted_loss_normalization: "sum_of_nonmasked_token_weights"
+  fail_if_any_prompt_token_has_nonignored_label: true
+  fail_if_no_supervised_completion_tokens: true
+
+mi300x_production_hyperparams:
+  hardware_profile: "1x AMD Instinct MI300X 192GB HBM3"
+  expected_runtime: "ROCm 6.2; validate installed PyTorch/attention-kernel compatibility"
+  precision: "bf16"
+  use_flash_attention_2: true
+  deepspeed_config_path: "00_infra_bootstrap/amd_rocm_cluster/deepspeed_zero3_rocm.json"
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 4
+  expected_world_size: 1
+  effective_batch_size: 32
+  num_train_epochs: 3
+  learning_rate: 1.0e-4
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.06
+  weight_decay: 0.01
+  adam_beta1: 0.90
+  adam_beta2: 0.95
+  adam_epsilon: 1.0e-8
+  max_grad_norm: 1.0
+  neftune_noise_alpha: 5.0
+  gradient_checkpointing: true
+  gradient_checkpointing_kwargs:
+  use_reentrant: false
+  use_cache: false
+  seed: 42
+  dataloader_num_workers: 4
+  logging_steps: 10
+  eval_strategy: "epoch"
+  save_strategy: "epoch"
+  save_total_limit: 2
+  load_best_model_at_end: true
+  metric_for_best_model: "eval_loss"
+  greater_is_better: false
+  report_to: "none"
+
+wsl2_verification_profile:
+  enabled_when_no_mi300x: true
+  profile_name: "local_smoke_test"
+  # This is a functional smoke test, not a production benchmark. Runtime depends
+  # on the local device, model loading, sequence lengths, and filesystem cache.
+  num_training_steps: 15
+  batch_size: 1
+  eval_batch_size: 1
+  gradient_accumulation_steps: 1
+  max_seq_length: 512
+  peak_learning_rate: 1.0e-4
+  min_learning_rate: 1.0e-5
+  precision: "auto"
+  use_flash_attention_2: false
+  gradient_checkpointing: true
+  use_cache: false
+  seed: 42
+  use_real_parquet_shards: true
+  train_shard_path: "02_dataset_factory/parquet_warehouse/train_sft_shard_00000.parquet"
+  validation_shard_path: "02_dataset_factory/parquet_warehouse/val_sft_shard_00000.parquet"
+  max_train_samples: 64
+  max_eval_samples: 16
+  fail_on_nonfinite_loss: true
+  verify_prompt_masking: true
+  verify_token_weight_assignment: true
+  verify_optimizer_step_occurs: true
+  verify_checkpoint_save_and_reload: false
+
+stage4b_exit_gate_criteria:
+  require_prompt_tokens_100pct_masked: true
+  min_val_xml_schema_compliance_pct: 99.0
+  min_val_algebraic_edge_consistency_pct: 98.0
+  max_allowed_algebraic_edge_mae: 0.0015
+  require_val_sft_loss_improvement: true
+  require_val_brier_loss_improvement: true
+  comparison_checkpoint_dir: "03_llm_training/model_registry/checkpoints/stage1_cpt"
+  validation_manifest: "02_dataset_factory/parquet_warehouse/sft_reasoning_manifest.yaml"
+  require_identical_validation_examples_for_comparison: true
+  fail_on_missing_gate_metric: true
+  fail_on_nonfinite_gate_metric: true
+  certificate_output_path: "03_llm_training/model_registry/checkpoints/stage2_sft/stage4b_sft_gate_certificate.json"

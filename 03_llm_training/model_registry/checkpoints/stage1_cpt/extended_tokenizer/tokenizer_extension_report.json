@@ -1,0 +1,29 @@
+{
+  "stage": "STAGE_4A_DOMAIN_TOKENIZER_EXTENDER",
+  "timestamp_utc": "2026-11-01T08:43:35.104993+00:00",
+  "base_model_id": "Qwen/Qwen2.5-7B",
+  "tokenizer_mode": "DETERMINISTIC_QWEN2_5_COMPATIBLE",
+  "original_vocab_size": 151646,
+  "added_domain_tokens_count": 43,
+  "unpadded_extended_vocab_size": 151689,
+  "hardware_aligned_vocab_size": 151744,
+  "pad_to_multiple_of": 64,
+  "semantic_mean_init_verified": true,
+  "atomic_single_token_split_verified": true,
+  "compression_ratio_improvement_pct": 30.43,
+  "token_id_map_sample": {
+    "<market_meta>": 151646,
+    "</market_meta>": 151647,
+    "<question>": 151648,
+    "</question>": 151649,
+    "<uma_rule>": 151650,
+    "</uma_rule>": 151651,
+    "<book>": 151652,
+    "</book>": 151653,
+    "<trajectory>": 151654,
+    "</trajectory>": 151655,
+    "<whale_flow>": 151656,
+    "</whale_flow>": 151657
+  },
+  "output_tokenizer_dir": "03_llm_training/model_registry/checkpoints/stage1_cpt/extended_tokenizer"
+}

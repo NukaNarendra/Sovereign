@@ -1,0 +1,160 @@
+# ============================================================================
+# SOVEREIGN PROBABILITY ENGINE — STAGE 5: GRPO VERIFIABLE REINFORCEMENT LEARNING
+# File: 03_llm_training/stage3_grpo_brier_edge/grpo_trainer_config/grpo_mi300x_config.yaml
+# Consumed by: 03_llm_training/stage3_grpo_brier_edge/run_grpo_pipeline.py
+# Upstream policy checkpoint: 03_llm_training/model_registry/checkpoints/stage2_sft
+# Upstream warehouse manifest: 02_dataset_factory/parquet_warehouse/grpo_verifiable_manifest.yaml
+# Target hardware: 1x AMD Instinct MI300X (192 GB HBM3, ROCm 6.2, CDNA3)
+# Local verification profile: Ubuntu WSL2 group-rollout smoke test
+# ============================================================================
+
+stage_metadata:
+  stage_name: "STAGE_5_GRPO_BRIER_AND_CLOB_EDGE_RL"
+  stage_id: "sovereign-stage5-grpo-rlvr-v1"
+  base_model_name: "Qwen/Qwen2.5-7B"
+  upstream_sft_checkpoint_dir: "03_llm_training/model_registry/checkpoints/stage2_sft"
+  upstream_sft_gate_certificate: "03_llm_training/model_registry/checkpoints/stage2_sft/stage4b_sft_gate_certificate.json"
+  grpo_warehouse_manifest: "02_dataset_factory/parquet_warehouse/grpo_verifiable_manifest.yaml"
+  vllm_rollout_config_path: "03_llm_training/stage3_grpo_brier_edge/grpo_trainer_config/vllm_rollout_engine.yaml"
+  output_checkpoint_dir: "03_llm_training/model_registry/checkpoints/stage3_grpo"
+  gate_certificate_output_path: "03_llm_training/model_registry/checkpoints/stage3_grpo/stage5_grpo_gate_certificate.json"
+
+# ============================================================================
+# 1. GROUP RELATIVE POLICY OPTIMIZATION (GRPO) MATHEMATICAL OBJECTIVE
+#
+# GRPO avoids a separate value/critic model. For each prompt x, sample a group
+# of G completions from the old policy and score each with the configured
+# verifiable reward function.
+#
+# Group-normalized advantage:
+#   A_i = (R_i - mean(R_1, ..., R_G)) / (std(R_1, ..., R_G) + eps)
+#
+# Unbiased KL estimator described in the project specification:
+#   D_KL(pi_theta || pi_ref) estimator = r - log(r) - 1
+#   where r = pi_ref / pi_theta.
+# ============================================================================
+
+grpo_algorithm_hyperparameters:
+  num_generations_per_prompt_G: 8
+  kl_divergence_beta: 0.04
+  ppo_clip_epsilon: 0.20
+  advantage_normalization_eps: 1.0e-6
+  use_unbiased_kl_estimator: true
+  scale_rewards_by_curriculum_weight: true
+  curriculum_weight_column: "grpo_curriculum_weight"
+  max_prompt_length_tokens: 2048
+  max_completion_length_tokens: 640
+  sampling_temperature: 0.70
+  sampling_top_p: 0.95
+
+# ============================================================================
+# 2. COMPOSITE VERIFIABLE REWARD WEIGHTING CONTRACT
+#
+# R_total = w_brier * R_brier(p, q_t, o)
+#         + w_edge  * R_clob_edge(p, q_t, s_t, o, safe_flag)
+#         + w_fmt   * R_xml_format(completion, p, q_t)
+# ============================================================================
+
+composite_reward_weights:
+  brier_calibration_reward:
+    enabled: true
+    weight: 1.00
+    skill_bonus_multiplier: 1.50
+    log_loss_regularizer_weight: 0.10
+    epsilon_clamp: 0.001
+
+  clob_spread_edge_reward:
+    enabled: true
+    weight: 0.65
+    fee_buffer_abs: 0.005
+    pnl_reward_multiplier: 2.00
+    overconfidence_spread_penalty: -0.35
+    uma_trap_trade_penalty: -0.50
+    uma_trap_avoidance_bonus: 0.20
+    inside_spread_hold_bonus: 0.10
+
+  xml_format_validator_reward:
+    enabled: true
+    weight: 0.35
+    valid_xml_bonus: 0.25
+    four_decimal_bonus: 0.10
+    algebraic_edge_match_bonus: 0.20
+    rubric_completeness_bonus: 0.20
+    algebraic_edge_mismatch_penalty: -0.45
+    malformed_xml_hard_penalty: -1.50
+    edge_tolerance: 0.0015
+
+# ============================================================================
+# 3. AMD INSTINCT MI300X (192 GB HBM3) PRODUCTION GRPO OPTIMIZER SETTINGS
+#
+# Intended co-resident VRAM split: 35% vLLM rollout engine, 60% DeepSpeed
+# ZeRO-3 policy/reference trainer, and 5% ROCm HIP runtime headroom.
+# ============================================================================
+
+mi300x_production_hyperparams:
+  precision: "bf16"
+  use_flash_attention_2: true
+  deepspeed_config_path: "00_infra_bootstrap/amd_rocm_cluster/deepspeed_zero3_rocm.json"
+  vram_allocation_ratio: 0.60
+  per_device_prompt_batch_size: 4
+  group_generations_G: 8
+  effective_completions_per_microstep: 32
+  gradient_accumulation_steps: 4
+  effective_completions_per_step: 128
+  num_grpo_epochs: 2
+  learning_rate: 5.0e-6
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.08
+  weight_decay: 0.01
+  adam_beta1: 0.90
+  adam_beta2: 0.95
+  adam_epsilon: 1.0e-8
+  max_grad_norm: 0.50
+  gradient_checkpointing: true
+  seed: 42
+
+peft_lora_config:
+  lora_r: 64
+  lora_alpha: 128
+  lora_dropout: 0.05
+  target_modules:
+    - "q_proj"
+    - "k_proj"
+    - "v_proj"
+    - "o_proj"
+    - "gate_proj"
+    - "up_proj"
+    - "down_proj"
+
+# ============================================================================
+# 4. LOCAL UBUNTU WSL2 VERIFICATION PROFILE (--smoke-test)
+#
+# Intended to run a 20-step, G=8 group-rollout GRPO verification loop over the
+# 2,800 TRAIN / 600 VAL / 600 TEST snapshots. Actual runtime depends on the
+# local hardware, model, and implementation; it is not guaranteed to finish
+# in a fixed time.
+# ============================================================================
+
+wsl2_verification_profile:
+  enabled_when_no_mi300x: true
+  num_training_steps: 20
+  group_size_G: 8
+  prompts_per_step: 32
+  initial_exploration_noise_std: 0.065
+  final_exploitation_noise_std: 0.012
+  peak_learning_rate: 5.0e-6
+  min_learning_rate: 5.0e-7
+  seed: 42
+
+# ============================================================================
+# 5. STAGE 5 EXIT GATE & PRODUCTION DEPLOYMENT BENCHMARKS
+#
+# Evaluate on the held-out out-of-time TEST split:
+# test_grpo_shard_00000.parquet
+# ============================================================================
+
+stage5_exit_gate_benchmarks:
+  require_test_brier_lower_than_market_baseline: true
+  require_positive_brier_skill_score_bss: true
+  max_allowed_expected_calibration_error_ece: 0.045
+  min_simulated_clob_sharpe_ratio: 1.50

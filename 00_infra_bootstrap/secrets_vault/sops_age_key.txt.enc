@@ -1,0 +1,14 @@
+# SOPS configuration for Stage 1.
+# This is configuration, not an encrypted vault; do not name it *.enc.
+# It uses the age PUBLIC key generated for the current Ubuntu key pair.
+# Local bootstrap only: one shared recipient does NOT provide cryptographic
+# separation between survival_agent and mi300x_trainer.
+
+creation_rules:
+  - path_regex: '(^|/)polygon_l1_l2_keystore\.json$'
+    encrypted_regex: '^(POLYGON_PRIVATE_KEY|POLYGON_MNEMONIC_PHRASE|POLYMARKET_CLOB_API_KEY|POLYMARKET_CLOB_SECRET|POLYMARKET_CLOB_PASSPHRASE|RELAYER_SIGNER_PRIVKEY|ALCHEMY_POLYGON_API_KEY|INFURA_POLYGON_API_KEY)$'
+    age: 'age1vt6s378n9x75j7spgjv8wk4fvp2ftx2vw8u5d6wt85q5ptffv4cqwhymfm'
+
+  - path_regex: '(^|/)api_credits_vault\.yaml$'
+    encrypted_regex: '^(AMD_DEV_CLOUD_API_TOKEN|AMD_SLURM_SSH_PRIVATE_KEY|FIREWORKS_AI_API_KEY|TAVILY_PROJECT_API_KEY|MERGE_GATEWAY_API_KEY|WANDB_API_KEY|HF_READ_WRITE_TOKEN|KALSHI_RSA_PRIVATE_KEY|DERIBIT_CLIENT_SECRET|STRIPE_B2B_WEBHOOK_SECRET)$'
+    age: 'age1vt6s378n9x75j7spgjv8wk4fvp2ftx2vw8u5d6wt85q5ptffv4cqwhymfm'

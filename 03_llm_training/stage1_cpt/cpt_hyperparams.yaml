@@ -1,0 +1,96 @@
+# ============================================================================
+# SOVEREIGN PROBABILITY ENGINE — STAGE 4A: CONTINUAL PRE-TRAINING (CPT)
+#
+# File: 03_llm_training/stage1_cpt/cpt_hyperparams.yaml
+# Consumed By: 03_llm_training/stage1_cpt/run_cpt_trainer.py
+# Upstream Manifest: 02_dataset_factory/parquet_warehouse/cpt_corpus_manifest.yaml
+# Target Hardware: 1x AMD Instinct MI300X (192GB HBM3 VRAM, ROCm 6.2, CDNA3)
+# Local Profile: Ubuntu WSL2 micro-model smoke test
+# ============================================================================
+
+stage_metadata:
+  stage_name: "STAGE_4A_CONTINUAL_PRETRAINING"
+  stage_id: "sovereign-stage4a-cpt-v1"
+  upstream_warehouse_manifest: "02_dataset_factory/parquet_warehouse/cpt_corpus_manifest.yaml"
+  upstream_gate_certificate: "data/processed_warehouse/final_splits/stage3_warehouse_gate_certificate.json"
+  output_checkpoint_dir: "03_llm_training/model_registry/checkpoints/stage1_cpt"
+  extended_tokenizer_dir: "03_llm_training/model_registry/checkpoints/stage1_cpt/extended_tokenizer"
+
+# ============================================================================
+# 1. BASE MODEL & VOCABULARY EXTENSION ARCHITECTURE
+# ============================================================================
+
+model_architecture:
+  base_model_name_or_path: "Qwen/Qwen2.5-7B"
+  fallback_local_micro_config:
+    hidden_size: 256
+    intermediate_size: 688
+    num_hidden_layers: 4
+    num_attention_heads: 8
+    num_key_value_heads: 2
+    max_position_embeddings: 4096
+    rms_norm_eps: 1.0e-6
+    rope_theta: 1000000.0
+    base_vocab_size: 151643
+
+tokenizer_extension:
+  num_domain_xml_tags: 24
+  num_microstructure_regime_tokens: 19
+  total_added_domain_tokens: 43
+  pad_vocab_to_multiple_of: 64
+  embedding_init_method: "mean_subword_semantic_init"
+  unfreeze_embed_tokens_and_lm_head: true
+
+# ============================================================================
+# 2. CONTINUAL PRE-TRAINING OPTIMIZATION HYPERPARAMETERS (MI300X PRODUCTION)
+#
+# Why cosine LR with a 2.0e-5 peak learning rate is used in Stage 4A:
+# A 7B base model already possesses strong English and mathematical
+# representations. A conservative peak learning rate of 2.0e-5 with 5% linear
+# warmup is intended to adapt the attention heads to the 8-block XML order-book
+# and UMA rule structure while reducing the risk of catastrophic forgetting.
+# ============================================================================
+
+mi300x_production_hyperparams:
+  precision: "bf16"
+  use_flash_attention_2: true
+  deepspeed_config_path: "00_infra_bootstrap/amd_rocm_cluster/deepspeed_zero3_rocm.json"
+  max_seq_length: 4096
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 8
+  gradient_accumulation_steps: 4
+  effective_tokens_per_step: 131072
+  num_train_epochs: 2
+  learning_rate: 2.0e-5
+  embedding_layer_learning_rate: 5.0e-5
+  min_learning_rate_ratio: 0.10
+  lr_scheduler_type: "cosine"
+  warmup_ratio: 0.05
+  weight_decay: 0.01
+  adam_beta1: 0.90
+  adam_beta2: 0.95
+  adam_epsilon: 1.0e-8
+  max_grad_norm: 1.0
+  gradient_checkpointing: true
+  seed: 42
+
+# ============================================================================
+# 3. LOCAL WSL2 SMOKE-TEST PROFILE (--smoke-test / CPU OR SINGLE GPU)
+#
+# Intended to verify Parquet loading, sequence packing, preamble loss masking
+# (-100), forward/backward passes, perplexity reduction, and checkpoint saving
+# quickly on Ubuntu WSL2. Actual runtime depends on hardware and implementation.
+# ============================================================================
+
+wsl2_smoke_test_profile:
+  enabled_by_default_when_no_mi300x: true
+  max_seq_length: 512
+  batch_size: 4
+  num_training_steps: 12
+  eval_every_steps: 4
+  learning_rate: 3.0e-4
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  seed: 42
+
+# ============================================================================

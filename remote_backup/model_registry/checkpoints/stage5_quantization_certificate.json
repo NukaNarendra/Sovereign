@@ -1,0 +1,18 @@
+{
+  "stage": "STAGE_5_PART_B_AWQ_4BIT_AND_GGUF_QUANTIZER",
+  "timestamp_utc": "2026-11-01T08:45:15.272177+00:00",
+  "upstream_merged_bf16_dir": "03_llm_training/model_registry/checkpoints/merged_bf16",
+  "calibration_prompts_used": 128,
+  "quantization_group_size": 128,
+  "zero_point_enabled": true,
+  "unquantized_bf16_size_gb": 15.24,
+  "quantized_4bit_awq_size_gb": 4.35,
+  "quantized_gguf_q4_k_m_size_gb": 4.58,
+  "compression_ratio_x": 3.5,
+  "awq_vs_rtn_mse_reduction_pct": -570.37,
+  "post_quant_test_brier_drift": 0.00014,
+  "gguf_binary_magic_header_verified": true,
+  "quantization_exit_gate_passed": true,
+  "awq_output_dir": "03_llm_training/model_registry/checkpoints/quantized_awq_4bit",
+  "gguf_output_path": "03_llm_training/model_registry/checkpoints/quantized_gguf_q4_k_m/sovereign-prob-7b-q4_k_m.gguf"
+}

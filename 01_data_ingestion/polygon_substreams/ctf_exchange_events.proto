@@ -1,0 +1,196 @@
+// STREAMING_CHUNK:Defining Protobuf v3 header and package namespace...
+// =============================================================================
+// SOVEREIGN PROBABILITY ENGINE — STAGE 2: DATA INGESTION (PART C)
+// File: 01_data_ingestion/polygon_substreams/ctf_exchange_events.proto
+// Target Network: Polygon PoS Mainnet (Chain ID 137)
+// Purpose: Strongly-typed Protocol Buffer v3 schemas for decoding on-chain
+//          Polymarket CTF Exchange v1/v2 OrderFilled logs, Conditional Token
+//          Framework (ERC-1155) PositionSplit / PositionsMerge / PayoutRedemption
+//          events, UMA Optimistic Oracle v2/v3 assertions, and sharp whale
+//          wallet telemetry.
+// =============================================================================
+
+syntax = "proto3";
+
+package sovereign.polymarket.v2;
+
+option go_package = "github.com/sovereign-quant/sovereign-prob-engine/pb/sovereign/polymarket/v2;polymarketv2";
+
+// =============================================================================
+// 1. ENUMERATIONS FOR COLLATERAL REGIMES, ORDER SIDES & ORACLE STATES
+// =============================================================================
+// STREAMING_CHUNK:Defining SettlementRegimeProto, OrderSideProto, and UmaEventTypeProto...
+enum SettlementRegimeProto {
+SETTLEMENT_REGIME_UNSPECIFIED = 0;
+SETTLEMENT_REGIME_LEGACY_USDC_E = 1;
+SETTLEMENT_REGIME_APRIL_2026_PUSD_V2 = 2;
+SETTLEMENT_REGIME_NEG_RISK_ADAPTER = 3;
+}
+
+enum OrderSideProto {
+ORDER_SIDE_UNSPECIFIED = 0;
+ORDER_SIDE_BUY_YES = 1;
+ORDER_SIDE_SELL_YES = 2;
+ORDER_SIDE_BUY_NO = 3;
+ORDER_SIDE_SELL_NO = 4;
+}
+
+enum CtfLifecycleActionProto {
+CTF_ACTION_UNSPECIFIED = 0;
+CTF_ACTION_CONDITION_PREPARATION = 1;
+CTF_ACTION_POSITION_SPLIT_MINT = 2;
+CTF_ACTION_POSITIONS_MERGE_BURN = 3;
+CTF_ACTION_PAYOUT_REDEMPTION = 4;
+CTF_ACTION_CONDITION_RESOLUTION = 5;
+}
+
+enum UmaOracleEventTypeProto {
+UMA_EVENT_UNSPECIFIED = 0;
+UMA_EVENT_QUESTION_INITIALIZED = 1;
+UMA_EVENT_PRICE_PROPOSED = 2;
+UMA_EVENT_PRICE_DISPUTED = 3;
+UMA_EVENT_QUESTION_RESOLVED = 4;
+UMA_EVENT_QUESTION_RESET = 5;
+}
+
+// =============================================================================
+// 2. CLOB V1 / V2 / NEGRISK ORDER FILLED MESSAGES
+// =============================================================================
+// STREAMING_CHUNK:Defining CtfOrderFilledEvent and BlockOrderFillsBatch messages...
+message CtfOrderFilledEvent {
+// Transaction & Block Metadata on Polygon Chain ID 137
+string tx_hash = 1;
+uint32 log_index = 2;
+uint64 block_number = 3;
+uint64 block_timestamp_sec = 4;
+string exchange_contract_address = 5;
+SettlementRegimeProto settlement_regime = 6;
+
+// EIP-712 Order & Counterparty Identifiers
+string order_hash = 7;
+string maker_address = 8;
+string taker_address = 9;
+
+// Asset IDs (0 indicates collateral token USDC.e / pUSD; >0 indicates ERC-1155 tokenId)
+string maker_asset_id = 10;
+string taker_asset_id = 11;
+
+// Raw 6-decimal atomic integer amounts from event log
+uint64 maker_amount_filled_raw = 12;
+uint64 taker_amount_filled_raw = 13;
+uint64 fee_amount_raw = 14;
+
+// Normalized Quantitative Fields (Computed by Substreams Map Module)
+string condition_id = 15;
+string outcome_token_id = 16;
+OrderSideProto canonical_side = 17;
+double execution_price_usd = 18;
+double canonical_yes_implied_prob = 19;
+double share_quantity = 20;
+double notional_usd = 21;
+double fee_usd = 22;
+}
+
+message BlockOrderFillsBatch {
+uint64 block_number = 1;
+uint64 block_timestamp_sec = 2;
+repeated CtfOrderFilledEvent fills = 3;
+}
+
+// =============================================================================
+// 3. CONDITIONAL TOKEN FRAMEWORK (CTF ERC-1155) LIFECYCLE MESSAGES
+// =============================================================================
+// STREAMING_CHUNK:Defining CtfLifecycleEvent and BlockCtfLifecycleBatch messages...
+message CtfLifecycleEvent {
+string tx_hash = 1;
+uint32 log_index = 2;
+uint64 block_number = 3;
+uint64 block_timestamp_sec = 4;
+CtfLifecycleActionProto action_type = 5;
+
+string stakeholder_address = 6;
+string collateral_token_address = 7;
+string parent_collection_id = 8;
+string condition_id = 9;
+repeated uint64 index_sets = 10;
+
+// Amount of collateral locked (Split), unlocked (Merge), or claimed (Redeem)
+uint64 amount_raw_6dec = 11;
+double amount_usd = 12;
+
+// Populated on ConditionResolution events (e.g. [1, 0] for YES win, [0, 1] for NO win)
+repeated uint64 payout_numerators = 13;
+}
+
+message BlockCtfLifecycleBatch {
+uint64 block_number = 1;
+uint64 block_timestamp_sec = 2;
+repeated CtfLifecycleEvent lifecycle_events = 3;
+}
+
+// =============================================================================
+// 4. UMA OPTIMISTIC ORACLE V2 / V3 & CTF ADAPTER MESSAGES
+// =============================================================================
+// STREAMING_CHUNK:Defining UmaOracleResolutionEvent and BlockUmaOracleEventsBatch...
+message UmaOracleResolutionEvent {
+string tx_hash = 1;
+uint32 log_index = 2;
+uint64 block_number = 3;
+uint64 block_timestamp_sec = 4;
+string oracle_contract_address = 5;
+UmaOracleEventTypeProto event_type = 6;
+
+string question_id = 7;
+string condition_id = 8;
+string price_identifier = 9;
+
+// Raw hexadecimal ancillaryData containing title, description, and res_data
+string ancillary_data_hex = 10;
+string ancillary_sha256_digest = 11;
+
+string proposer_address = 12;
+string disputer_address = 13;
+int64 proposed_price_wei = 14;
+int64 settled_price_wei = 15;
+uint64 reward_amount_raw = 16;
+uint64 bond_amount_raw = 17;
+}
+
+message BlockUmaOracleEventsBatch {
+uint64 block_number = 1;
+uint64 block_timestamp_sec = 2;
+repeated UmaOracleResolutionEvent oracle_events = 3;
+}
+
+// =============================================================================
+// 5. SHARP WHALE WALLET PROFILING & ANOMALY SIGNAL MESSAGES
+// =============================================================================
+// STREAMING_CHUNK:Defining SharpWhaleProfile and BlockWhaleSignalBatch messages...
+message SharpWhaleProfile {
+string wallet_address = 1;
+uint64 first_seen_block = 2;
+uint64 last_active_block = 3;
+uint32 total_markets_traded = 4;
+uint32 resolved_markets_won = 5;
+double cumulative_volume_usd = 6;
+double realized_net_pnl_usd = 7;
+double return_on_volume_roi = 8;
+double empirical_brier_score = 9;
+double maker_fill_ratio = 10;
+bool is_verified_sharp_whale = 11;
+}
+
+message SharpWhaleTradeSignal {
+string tx_hash = 1;
+uint64 block_number = 2;
+uint64 block_timestamp_sec = 3;
+SharpWhaleProfile whale_profile = 4;
+CtfOrderFilledEvent triggering_fill = 5;
+double whale_conviction_zscore = 6;
+}
+
+message BlockWhaleSignalBatch {
+uint64 block_number = 1;
+uint64 block_timestamp_sec = 2;
+repeated SharpWhaleTradeSignal signals = 3;
+}

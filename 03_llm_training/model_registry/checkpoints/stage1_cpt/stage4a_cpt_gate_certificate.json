@@ -1,0 +1,53 @@
+{
+  "stage": "STAGE_4A_CONTINUAL_PRETRAINING_TRAINER",
+  "timestamp_utc": "2026-11-01T08:44:19.763097+00:00",
+  "execution_profile": "WSL2_LOCAL_VERIFICATION_PROFILE",
+  "train_parquet_shard": "data/processed_warehouse/final_splits/cpt_corpus/train_cpt_shard_00000.parquet",
+  "val_parquet_shard": "data/processed_warehouse/final_splits/cpt_corpus/val_cpt_shard_00000.parquet",
+  "train_documents_loaded": 2800,
+  "val_documents_loaded": 600,
+  "extended_vocab_size_aligned": 151744,
+  "system_preamble_masked_with_neg100": true,
+  "initial_val_clm_loss": 1.92873,
+  "final_val_clm_loss": 1.51994,
+  "initial_val_perplexity": 6.8808,
+  "final_val_perplexity": 4.572,
+  "perplexity_improved_verified": true,
+  "emergency_credit_signal_trapped": true,
+  "stage4a_exit_gate_passed": true,
+  "checkpoint_saved_dir": "03_llm_training/model_registry/checkpoints/stage1_cpt",
+  "step_history": [
+    {
+      "step": 9,
+      "train_clm_loss": 1.52647,
+      "train_perplexity": 4.6019,
+      "learning_rate": 5.58e-06,
+      "masked_preamble_tokens_pct": 22.66,
+      "active_xml_loss_tokens_count": 1108786
+    },
+    {
+      "step": 10,
+      "train_clm_loss": 1.51116,
+      "train_perplexity": 4.532,
+      "learning_rate": 3.65e-06,
+      "masked_preamble_tokens_pct": 22.66,
+      "active_xml_loss_tokens_count": 1108786
+    },
+    {
+      "step": 11,
+      "train_clm_loss": 1.49795,
+      "train_perplexity": 4.4725,
+      "learning_rate": 2.42e-06,
+      "masked_preamble_tokens_pct": 22.66,
+      "active_xml_loss_tokens_count": 1108786
+    },
+    {
+      "step": 12,
+      "train_clm_loss": 1.48693,
+      "train_perplexity": 4.4235,
+      "learning_rate": 2e-06,
+      "masked_preamble_tokens_pct": 22.66,
+      "active_xml_loss_tokens_count": 1108786
+    }
+  ]
+}

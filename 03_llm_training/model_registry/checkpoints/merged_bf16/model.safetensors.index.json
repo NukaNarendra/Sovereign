@@ -1,0 +1,27 @@
+{
+  "metadata": {
+    "total_size": 15234568192,
+    "format": "pt",
+    "precision": "BF16",
+    "merged_stages": [
+      "STAGE_4A_CPT",
+      "STAGE_4B_SFT",
+      "STAGE_5_GRPO"
+    ]
+  },
+  "weight_map": {
+    "model.embed_tokens.weight": "model-00001-of-00004.safetensors",
+    "model.layers.0.self_attn.q_proj.weight": "model-00001-of-00004.safetensors",
+    "lm_head.weight": "model-00004-of-00004.safetensors"
+  },
+  "sovereign_bayesian_weights": {
+    "w_extremizing_slope": 0.28,
+    "w_momentum_24h": 0.26,
+    "w_obi_imbalance": 0.025,
+    "w_micro_price": 0.45,
+    "w_base_rate_anchor": 0.0,
+    "w_uma_trap_dampener": 0.15,
+    "w_spread_discipline_gate": 1.15,
+    "w_platt_log_odds_gain": 2.35
+  }
+}

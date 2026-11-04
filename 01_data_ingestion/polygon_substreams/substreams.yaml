@@ -1,0 +1,201 @@
+STREAMING_CHUNK:Defining StreamingFast Substreams manifest for Polygon Chain 137...
+
+==============================================================================
+
+SOVEREIGN PROBABILITY ENGINE — STAGE 2: DATA INGESTION (PART C)
+
+File: 01_data_ingestion/polygon_substreams/substreams.yaml
+
+Target Network: Polygon PoS Mainnet (Chain ID 137)
+
+Purpose: StreamingFast Substreams manifest indexing all 6 core Polymarket &
+
+UMA Optimistic Oracle smart contracts across both Legacy USDC.e and
+
+April 2026 CLOB v2 (pUSD) eras:
+
+1. Conditional Tokens Framework (CTF): 0x4D97DCd97eC945f40cF65F87097ACe5EA0476045
+
+2. Legacy CTF Exchange v1            : 0x4bFb41d5B3570DeFd03C39a9A4D8dE6Bd8B8982E
+
+3. CLOB v2 / NegRisk CTF Exchange    : 0xC5d563A36AE78145C45a50134d48A1215220f80a
+
+4. NegRisk Multi-Outcome Adapter     : 0xd91E80cF2E7be2e162c6513ceD06f1dD0dA35296
+
+5. UMA CTF Adapter v2                : 0x6A9D222616C90FcA5754cd1333cFD9b7fb6a4F74
+
+6. UMA Optimistic Oracle v3          : 0x5953f2538F613E05bAED8A5AeFa8e6622467AD3D
+
+==============================================================================
+
+specVersion: v0.1.0
+package:
+name: sovereign_polymarket_polygon_substreams
+version: v2.0.0
+url: https://github.com/sovereign-quant/sovereign-prob-engine
+doc: |
+High-throughput Polygon PoS (Chain ID 137) on-chain indexer for Polymarket
+CLOB v1/v2 OrderFilled events, Conditional Token Framework (CTF) PositionSplit
+/ PositionsMerge / PayoutRedemption events, and UMA Optimistic Oracle
+QuestionInitialized & PriceResolved assertions.
+
+STREAMING_CHUNK:Linking Protobuf schemas and WASM Rust module binary definitions...
+
+protobuf:
+files:
+- ctf_exchange_events.proto
+importPaths:
+- ./
+
+binaries:
+default:
+type: wasm/rust-v1
+file: ./target/wasm32-unknown-unknown/release/sovereign_polygon_substreams.wasm
+
+network: polygon
+
+STREAMING_CHUNK:Configuring Polygon start blocks and smart contract parameters...
+
+params:
+
+Contract address filters passed to map_ctf_exchange_fills and map_uma_events
+
+map_ctf_exchange_fills: "ctf_v1=0x4bfb41d5b3570defd03c39a9a4d8de6bd8b8982e&ctf_v2=0xc5d563a36ae78145c45a50134d48a1215220f80a&negrisk=0xd91e80cf2e7be2e162c6513ced06f1dd0da35296"
+map_conditional_token_lifecycle: "ctf_core=0x4d97dcd97ec945f40cf65f87097ace5ea0476045&usdc_e=0x2791bca1f2de4661ed88a30c99a7a9449aa84174&usdc_native=0x3c499c542cef5e3811e1192ce70d8cc03d5c3359"
+map_uma_oracle_resolutions: "uma_adapter=0x6a9d222616c90fca5754cd1333cfd9b7fb6a4f74&uma_oov3=0x5953f2538f613e05baed8a5aefa8e6622467ad3d"
+
+==============================================================================
+
+PIPELINE MODULES (MAP & STORE STAGES ON POLYGON MAINNET)
+
+==============================================================================
+
+STREAMING_CHUNK:Defining map_ctf_exchange_fills and map_conditional_token_lifecycle...
+
+modules:
+
+----------------------------------------------------------------------------
+
+1. MAP MODULE: Extracts all CLOB v1, CLOB v2 (pUSD), & NegRisk OrderFilled logs
+
+Event Topic0: 0xd0a08e8c493f9c94f29311604c9de1b4e8c8d4c06bd0c789af57f2d65bfec0f6
+
+----------------------------------------------------------------------------
+
+name: map_ctf_exchange_fills
+kind: map
+initialBlock: 33605400
+inputs:
+
+params: string
+
+source: sf.ethereum.type.v2.Block
+output:
+type: proto:sovereign.polymarket.v2.BlockOrderFillsBatch
+doc: |
+Decodes every OrderFilled and OrdersMatched log emitted on Polygon by
+CTF Exchange v1 (0x4bFb41d5...) and CLOB v2 / NegRisk Exchange (0xC5d563A3...).
+Computes canonical 6-decimal USD notional and implied probability p_t.
+
+----------------------------------------------------------------------------
+
+2. MAP MODULE: Extracts CTF ConditionPreparation, PositionSplit, Merge & Redeem
+
+----------------------------------------------------------------------------
+
+name: map_conditional_token_lifecycle
+kind: map
+initialBlock: 4023686
+inputs:
+
+params: string
+
+source: sf.ethereum.type.v2.Block
+output:
+type: proto:sovereign.polymarket.v2.BlockCtfLifecycleBatch
+doc: |
+Tracks ERC-1155 conditional token minting (PositionSplit), burning
+(PositionsMerge), and final settlement redemptions (PayoutRedemption)
+against both legacy USDC.e and native USDC / pUSD collateral wrappers.
+
+STREAMING_CHUNK:Defining map_uma_oracle_resolutions and whale store modules...
+
+----------------------------------------------------------------------------
+
+3. MAP MODULE: Extracts UMA Optimistic Oracle QuestionInitialized & Disputes
+
+----------------------------------------------------------------------------
+
+name: map_uma_oracle_resolutions
+kind: map
+initialBlock: 33605400
+inputs:
+
+params: string
+
+source: sf.ethereum.type.v2.Block
+output:
+type: proto:sovereign.polymarket.v2.BlockUmaOracleEventsBatch
+doc: |
+Captures QuestionInitialized, QuestionResolved, ProposePrice, and
+DisputePrice events from UmaCtfAdapter and OptimisticOracleV3, preserving
+raw hexadecimal ancillaryData for Stage 2 Part C rule decoding.
+
+----------------------------------------------------------------------------
+
+4. STORE MODULE: Cumulative Volume & Realized PnL Ledger per Polygon Wallet
+
+----------------------------------------------------------------------------
+
+name: store_wallet_cumulative_stats
+kind: store
+initialBlock: 33605400
+updatePolicy: add
+valueType: int64
+inputs:
+
+map: map_ctf_exchange_fills
+
+map: map_conditional_token_lifecycle
+doc: |
+Maintains running on-chain volume, maker/taker ratio, and redemption
+payouts per Polygon address to identify sharp institutional ("whale")
+wallets in real time.
+
+----------------------------------------------------------------------------
+
+5. MAP MODULE: Sharp Whale Flow Divergence Signal Generator
+
+----------------------------------------------------------------------------
+
+name: map_sharp_whale_flow_signals
+kind: map
+initialBlock: 33605400
+inputs:
+
+map: map_ctf_exchange_fills
+
+store: store_wallet_cumulative_stats
+mode: get
+output:
+type: proto:sovereign.polymarket.v2.BlockWhaleSignalBatch
+doc: |
+Emits a high-priority signal whenever a wallet with >$50,000 historical
+realized profit and >62% Brier calibration accuracy sweeps a CLOB v2 book.
+
+STREAMING_CHUNK:Defining sink configurations for Parquet and PostgreSQL/TimescaleDB...
+
+==============================================================================
+
+SINK CONFIGURATIONS (PARQUET DATA LAKE & PHASE 2 TIMESCALEDB WAREHOUSE)
+
+==============================================================================
+
+sink:
+module: map_ctf_exchange_fills
+type: sf.substreams.sink.parquet.v1.Service
+config:
+path: "./data/raw_lake/polygon_substreams"
+compression: "zstd"
+row_group_size: 100000
+flushing_block_interval: 1000

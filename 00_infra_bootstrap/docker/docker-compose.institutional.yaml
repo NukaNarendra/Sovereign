@@ -1,0 +1,96 @@
+# ==============================================================================
+# SOVEREIGN PROBABILITY ENGINE — INSTITUTIONAL CLUSTER
+# File: 00_infra_bootstrap/docker/docker-compose.institutional.yaml
+#
+# Phase 2: Cross-exchange event arbitrage and ERC-4626 alpha vaults
+# Phase 3: Probability-as-a-Service API and enterprise risk terminal
+#
+# IMPORTANT:
+# - Set required credentials through environment variables or a secret manager.
+# - Several application commands below are placeholders and must be replaced
+#   with real service entrypoints before production use.
+# - Compose orchestrates services; it does not implement trading or API logic.
+# ==============================================================================
+
+name: sovereign_institutional_cluster
+
+services:
+  # 1. TimescaleDB quantitative tick and calibration warehouse
+  timescaledb_market_warehouse:
+    image: timescale/timescaledb:2.17.2-pg16
+    container_name: sovereign_timescaledb
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sovereign_quant}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in your environment}
+      POSTGRES_DB: sovereign_prob_warehouse
+      PGDATA: /var/lib/postgresql/data/pgdata
+    command:
+      - postgres
+      - -c
+      - shared_buffers=2GB
+      - -c
+      - work_mem=64MB
+      - -c
+      - max_connections=250
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - timescaledb_data_vol:/var/lib/postgresql/data
+    networks:
+      - institutional_data_net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+
+  # 2. Redis cross-exchange orderbook and alpha stream bus
+  redis_orderbook_bus:
+    image: redis:7.4-alpine
+    container_name: sovereign_redis_bus
+    restart: always
+    command:
+      - redis-server
+      - --save
+      - ""
+      - --appendonly
+      - "no"
+      - --maxmemory
+      - 4gb
+      - --maxmemory-policy
+      - allkeys-lru
+      - --tcp-keepalive
+      - "60"
+    ports:
+      - "127.0.0.1:6379:6379"
+    networks:
+      - institutional_data_net
+      - institutional_exec_net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # 3. AMD ROCm vLLM inference engine
+  # Placeholder command: this does not start a real inference HTTP server.
+  vllm_rocm_inference_engine:
+    container_name: sovereign_vllm_rocm_server
+    build:
+      context: ../..
+      dockerfile: 00_infra_bootstrap/docker/training.Dockerfile
+    restart: unless-stopped
+    environment:
+      PYTORCH_ROCM_ARCH: gfx942
+      VLLM_GPU_MEMORY_UTILIZATION: "0.85"
+      VLLM_USE_TRITON_FLASH_ATTN: "1"
+      HIP_VISIBLE_DEVICES: "0"
+    command:
+      - python3
+      - -c
+      - "import time, logging; logging.basicConfig(level=logging.INFO); logging.info('[VLLM-SERVER] Placeholder: configure the actual vLLM server entrypoint.'); time.sleep(3600)"
+    volumes:
+      - model_registry_vol:/workspace/sovereign-prob-engine/03_llm_training/model_registry:ro
+    networks:
+      - institutional_exec_net

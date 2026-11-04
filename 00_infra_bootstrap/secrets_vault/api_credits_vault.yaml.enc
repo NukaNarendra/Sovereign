@@ -1,0 +1,78 @@
+# Sovereign Probability Engine — Stage 1 API credits configuration
+# Source template. This is plaintext until encrypted with SOPS.
+# Secret values are deliberately fake placeholders.
+
+vault_metadata:
+  schema_version: "1.0.0-student-bootstrap-to-100cr"
+  zero_bankroll_leak_guarantee: true
+  ephemeral_target_dir: "/dev/shm/sovereign_vault"
+
+amd_developer_cloud_pool:
+  provider_name: "AMD AI Developer Program — Instinct MI300X Cluster"
+  initial_credit_usd: 100.00
+  hourly_instance_rate_usd: 1.95
+  safety_checkpoint_buffer_usd: 4.50
+  expiration_window_days: 30
+  target_hardware_arch: "gfx942_CDNA3_192GB_HBM3"
+  cluster_slurm_login_host: "mi300x-login.aac.amd.com"
+  cluster_slurm_partition: "mi300x_baremetal"
+  AMD_DEV_CLOUD_API_TOKEN: "REPLACE_ME_LOCALLY_BEFORE_ENCRYPTION"
+  AMD_SLURM_SSH_PRIVATE_KEY: "REPLACE_ME_LOCALLY_BEFORE_ENCRYPTION"
+
+fireworks_ai_inference_pool:
+  provider_name: "Fireworks AI Serverless Fine-Tuned LoRA Endpoint"
+  initial_credit_usd: 50.00
+  safety_fallback_buffer_usd: 1.50
+  expiration_window_days: 90
+  base_api_url: "https://api.fireworks.ai/inference/v1"
+  deployed_model_id: "accounts/sovereign-prob-engine/models/qwen2p5-7b-polymarket-grpo-v1"
+  cost_per_million_input_tokens_usd: 0.20
+  cost_per_million_output_tokens_usd: 0.20
+  virtual_accounting_charge_per_call_usd: 0.0002
+  local_fallback_engine: "llama_cpp_4bit_awq_gguf"
+  FIREWORKS_AI_API_KEY: "REPLACE_ME_LOCALLY_BEFORE_ENCRYPTION"
+
+tavily_project_plan_pool:
+  provider_name: "Tavily Search API (4-Month Free Project Plan)"
+  total_plan_value_usd: 120.00
+  monthly_credit_value_usd: 30.00
+  expiration_window_days: 120
+  monthly_search_requests_quota: 4000
+  historical_ingestion_daily_cap: 100
+  live_mcp_runtime_daily_cap: 30
+  search_depth_mode: "advanced"
+  include_raw_content: true
+  TAVILY_PROJECT_API_KEY: "REPLACE_ME_LOCALLY_BEFORE_ENCRYPTION"
+
+merge_gateway_teacher_pool:
+  provider_name: "Merge Gateway Multi-LLM Teacher Router"
+  monthly_credit_usd: 10.00
+  safety_buffer_usd: 0.50
+  billing_cycle_days: 30
+  gateway_base_url: "https://api.merge.dev/llm-gateway/v1"
+  preferred_teacher_models:
+    - "claude-3-7-sonnet-reasoning"
+    - "deepseek-r1-distill-qwen-32b"
+  require_blind_timestamp_masking: true
+  MERGE_GATEWAY_API_KEY: "REPLACE_ME_LOCALLY_BEFORE_ENCRYPTION"
+
+mlops_registry_credentials:
+  wandb_project_name: "sovereign-prob-engine-grpo"
+  hf_organization_repo: "sovereign-quant/polymarket-grpo-7b"
+  WANDB_API_KEY: "REPLACE_ME_LOCALLY_BEFORE_ENCRYPTION"
+  HF_READ_WRITE_TOKEN: "REPLACE_ME_LOCALLY_BEFORE_ENCRYPTION"
+
+institutional_scale_credentials:
+  kalshi_fix_exchange:
+    rest_base_url: "https://trading-api.kalshi.com/trade-api/v2"
+    fix_host: "fix.kalshi.com:8443"
+    kalshi_key_id: "sovereign-inst-kalshi-key-01"
+    KALSHI_RSA_PRIVATE_KEY: "REPLACE_ME_LOCALLY_BEFORE_ENCRYPTION"
+  deribit_options_hedger:
+    rest_base_url: "https://www.deribit.com/api/v2"
+    deribit_client_id: "sovereign_deribit_macro_hedger"
+    DERIBIT_CLIENT_SECRET: "REPLACE_ME_LOCALLY_BEFORE_ENCRYPTION"
+  b2b_probability_saas_billing:
+    tier_1_hedge_fund_monthly_usd: 2500.00
+    tier_2_enterprise_terminal_monthly_usd: 8500.00
+    STRIPE_B2B_WEBHOOK_SECRET: "REPLACE_ME_LOCALLY_BEFORE_ENCRYPTION"

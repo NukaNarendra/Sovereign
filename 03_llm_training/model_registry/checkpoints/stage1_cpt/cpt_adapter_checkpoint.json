@@ -1,0 +1,9 @@
+{
+  "base_model": "Qwen/Qwen2.5-7B",
+  "stage": "STAGE_4A_CPT_ADAPTED",
+  "extended_vocab_size": 151744,
+  "final_val_clm_loss": 1.51994,
+  "final_val_perplexity": 4.572,
+  "domain_special_tokens_count": 43,
+  "timestamp_utc": "2026-11-01T08:44:19.744751+00:00"
+}

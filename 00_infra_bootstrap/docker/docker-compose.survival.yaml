@@ -1,0 +1,103 @@
+# SOVEREIGN PROBABILITY ENGINE — Phase 1 survival stack
+# File: 00_infra_bootstrap/docker/docker-compose.survival.yaml
+# Requires Docker Compose v2 and a Linux Docker host.
+# IMPORTANT: the WebSocket filter and MCP gateway commands below are placeholders;
+# replace them with the real service entrypoints before live operation.
+
+name: sovereign_survival_stack
+
+services:
+  # 1. One-shot SOPS/Age vault unsealer.
+  vault_init_unsealer:
+    container_name: sovereign_vault_unsealer
+    build:
+      context: ../..
+      dockerfile: 00_infra_bootstrap/docker/runtime_agent.Dockerfile
+    command:
+      - python3
+      - 00_infra_bootstrap/stage1_bootstrap_suite.py
+      - --unseal-vault
+    restart: "no"
+    environment:
+      SOPS_AGE_KEY: ${SOPS_AGE_KEY:?Set SOPS_AGE_KEY before starting the stack}
+      SOVEREIGN_EPHEMERAL_VAULT_DIR: /dev/shm/sovereign_vault
+    volumes:
+      - ephemeral_vault_shm:/dev/shm/sovereign_vault
+      - survival_state_vol:/app/state
+    networks:
+      - mcp_internal_net
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # 2. CLOB WebSocket anomaly filter.
+  # The current command only logs and sleeps; it is not a live feed processor.
+  clob_anomaly_ws_filter:
+    container_name: sovereign_clob_ws_filter
+    build:
+      context: ../..
+      dockerfile: 00_infra_bootstrap/docker/runtime_agent.Dockerfile
+    command:
+      - python3
+      - -c
+      - "import time, logging; logging.basicConfig(level=logging.INFO); logging.info('[WS-FILTER] Placeholder only; wire the CLOB WebSocket processor here.'); time.sleep(3600)"
+    restart: unless-stopped
+    depends_on:
+      vault_init_unsealer:
+        condition: service_completed_successfully
+    environment:
+      POLYMARKET_CLOB_WS_URL: wss://ws-subscriptions-clob.polymarket.com/ws/market
+      ZSCORE_VOLUME_THRESHOLD: "3.0"
+      ODDS_VELOCITY_JUMP_THRESHOLD: "0.04"
+      WAKE_QUEUE_STATE_DIR: /app/state/wake_queue
+    volumes:
+      - survival_state_vol:/app/state
+      - survival_logs_vol:/app/logs
+    networks:
+      polygon_external_net:
+        driver: bridge
+        name: sovereign_polygon_ext_net
+
+      mcp_internal_net:
+        driver: bridge
+        internal: true
+        name: sovereign_mcp_int_net
+
+    deploy:
+      resources:
+        limits:
+          cpus: "0.25"
+          memory: 96M
+        reservations:
+          cpus: "0.05"
+          memory: 32M
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+
+  # 3. MCP tool gateway.
+  # The current command is a placeholder and does not actually expose MCP tools.
+  mcp_tool_gateway:
+    container_name: sovereign_mcp_gateway
+    build:
+      context: ../..
+      dockerfile: 00_infra_bootstrap/docker/runtime_agent.Dockerfile
+    command:
+      - python3
+      - -c
+      - "import time, logging; logging.basicConfig(level=logging.INFO); logging.info('[MCP-GATEWAY] Placeholder only; wire the MCP servers here.'); time.sleep(3600)"
+    restart: unless-stopped
+    depends_on:
+      vault_init_unsealer:
+        condition: service_completed_successfully
+    environment:
+      POLYMARKET_CLOB_API_URL: https://clob.polymarket.com
+      POLYMARKET_GAMMA_API_URL: https://gamma-api.polymarket.com
+      TAVILY_QUOTA_MONTHLY_LIMIT: "4000"
+      SOVEREIGN_EPHEMERAL_VAULT_DIR: /dev/shm/sovereign_vault
+    volumes:
+      - ephemeral_vault_shm:/dev/shm/sovereign_vault:ro
+      - survival_state_vol:/app/state
+      - survival_logs_vol:/app/logs

@@ -1,0 +1,78 @@
+# ============================================================================
+# SOVEREIGN PROBABILITY ENGINE — STAGE 5: GRPO REWARD WEIGHTS CURRICULUM SCHEDULE
+#
+# File: 03_llm_training/stage3_grpo_brier_edge/grpo_trainer_config/reward_weights_schedule.yaml
+# Consumed By: 03_llm_training/stage3_grpo_brier_edge/run_grpo_pipeline.py
+#
+# Purpose: Dynamic 3-phase curriculum schedule that shifts GRPO reward emphasis
+# smoothly across training epochs on AMD Instinct MI300X (192 GB HBM3).
+#
+# Phase 1 (Warmup / Structural Stabilization, 0%–20% of steps):
+#   High format and rubric weight to stabilize XML and algebraic math.
+# Phase 2 (Proper Brier Calibration Core, 20%–65% of steps):
+#   High Brier and log-loss weight to target Brier Skill Score > 0.
+# Phase 3 (CLOB Microstructure & Survival Alpha, 65%–100% of steps):
+#   Ramps CLOB spread-adjusted PnL and overconfidence penalty; tunes the
+#   policy for 0.25x fractional Kelly execution on the $5 wallet.
+# ============================================================================
+
+schedule_metadata:
+  schedule_id: "sovereign-stage5-grpo-reward-curriculum-v1"
+  interpolation_mode: "piecewise_cosine_annealing"
+  normalize_composite_reward_variance: true
+  apply_horizon_stratifier_multiplier: true
+  horizon_multiplier_column: "grpo_curriculum_weight"
+
+# ============================================================================
+# 1. THREE-PHASE CURRICULUM WEIGHT TRAJECTORY
+# ============================================================================
+
+curriculum_phases:
+  phase_1_structural_and_algebraic_lock:
+    step_fraction_start: 0.00
+    step_fraction_end: 0.20
+    objective_focus: "Eliminate XML parsing errors, enforce |(p - q_t) - edge| <= 0.0015, and prevent CoT collapse."
+    reward_component_weights:
+      w_brier_proper_score: 0.85
+      w_brier_skill_bonus: 1.00
+      w_clamped_log_loss_reg: 0.08
+      w_clob_spread_pnl_edge: 0.35
+      w_overconfidence_penalty: 0.50
+      w_xml_schema_and_math: 0.60
+      w_reasoning_completeness: 0.40
+
+  phase_2_brier_calibration_sharpening:
+    step_fraction_start: 0.20
+    step_fraction_end: 0.65
+    objective_focus: "Maximize strictly proper Brier Skill Score (BSS) relative to market consensus midpoint q_t."
+    reward_component_weights:
+      w_brier_proper_score: 1.00
+      w_brier_skill_bonus: 1.50
+      w_clamped_log_loss_reg: 0.12
+      w_clob_spread_pnl_edge: 0.55
+      w_overconfidence_penalty: 0.85
+      w_xml_schema_and_math: 0.35
+      w_reasoning_completeness: 0.25
+
+  phase_3_clob_spread_and_kelly_execution:
+    step_fraction_start: 0.65
+    step_fraction_end: 1.00
+    objective_focus: "Maximize spread-adjusted CLOB Maker/Taker PnL and enforce 100% UMA dispute trap avoidance."
+    reward_component_weights:
+      w_brier_proper_score: 1.00
+      w_brier_skill_bonus: 1.50
+      w_clamped_log_loss_reg: 0.10
+      w_clob_spread_pnl_edge: 0.75
+      w_overconfidence_penalty: 1.25
+      w_xml_schema_and_math: 0.35
+      w_reasoning_completeness: 0.25
+
+# ============================================================================
+# 2. GUARDRAIL OVERRIDES & HARD VETO PENALTIES (ACTIVE ACROSS ALL PHASES)
+# ============================================================================
+
+hard_veto_invariants:
+  malformed_xml_override_reward: -2.00
+  algebraic_edge_sign_contradiction_penalty: -0.75
+  reckless_uma_trap_trade_penalty: -0.65
+  extreme_log_loss_clamp_epsilon: 0.001
