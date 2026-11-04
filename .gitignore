@@ -30,3 +30,6 @@ logs/
 
 # Local backups
 remote_backup/
+
+# IDE configuration
+.idea/
