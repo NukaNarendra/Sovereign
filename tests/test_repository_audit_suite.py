@@ -157,6 +157,34 @@ class TestSovereignRepositoryAudit(unittest.TestCase):
                 f"Bash syntax error in {sh_path}: {proc.stderr}",
             )
 
+    def test_07_cpt_and_sft_trainer_instantiation_and_gcp_runner_integrity(self) -> None:
+        """Verifies CPT/SFT trainers instantiate cleanly and GCP script has all 6 stages."""
+        cpt_mod = importlib.import_module("03_llm_training.stage1_cpt.run_cpt_trainer")
+        sft_mod = importlib.import_module("03_llm_training.stage2_sft.run_sft_trainer")
+
+        cpt_trainer = cpt_mod.SovereignCPTTrainer()
+        self.assertTrue(hasattr(cpt_trainer, "tokenize_and_mask_cpt_document"))
+
+        sft_trainer = sft_mod.SovereignSFTTrainer()
+        self.assertTrue(hasattr(sft_trainer, "_verify_upstream_cpt_checkpoint"))
+
+        gcp_sh = (
+            REPO_ROOT / "00_infra_bootstrap/gcp_gpu_cluster/run_gcp_cuda_training.sh"
+        ).read_text(encoding="utf-8")
+        for required_step in (
+            "stage4a_tokenizer",
+            "stage4a_cpt",
+            "stage4b_sft",
+            "stage5_grpo",
+            "stage5_evaluation",
+            "stage5_quantization",
+        ):
+            self.assertIn(
+                required_step,
+                gcp_sh,
+                f"Missing {required_step} in run_gcp_cuda_training.sh (truncated file)!",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
