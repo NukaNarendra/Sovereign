@@ -27,6 +27,7 @@ from __future__ import annotations
 import os
 import sys
 import json
+import shutil
 import hashlib
 import logging
 import pathlib
@@ -92,11 +93,24 @@ class FireworksLoRADeployer:
             "03_llm_training/model_registry/registry_manifest.json"
         ),
         api_key: Optional[str] = None,
+        account_id: Optional[str] = None,
     ) -> None:
         self.checkpoints_root = checkpoints_root
         self.registry_manifest_path = registry_manifest_path
+        self.fireworks_bundle_dir = (
+            self.checkpoints_root.parent / "exports" / "fireworks_lora_bundle"
+        )
+        self.fireworks_bundle_dir.mkdir(parents=True, exist_ok=True)
         self.api_key = (
-            api_key or os.environ.get("FIREWORKS_AI_API_KEY") or ""
+            api_key
+            or os.environ.get("FIREWORKS_AI_API_KEY")
+            or os.environ.get("FIREWORKS_API_KEY")
+            or ""
+        ).strip()
+        self.account_id = (
+            account_id
+            or os.environ.get("FIREWORKS_ACCOUNT_ID")
+            or "sovereign-prob-engine"
         ).strip()
 
     @property
@@ -106,6 +120,79 @@ class FireworksLoRADeployer:
             and "placeholder" not in self.api_key.lower()
             and not self.api_key.startswith("ENC[")
         )
+
+    def _package_fireworks_lora_bundle(
+        self, grpo_data: Dict[str, Any]
+    ) -> pathlib.Path:
+        """
+        Packages a clean, Fireworks-AI-compliant LoRA adapter bundle inside
+        `03_llm_training/model_registry/exports/fireworks_lora_bundle/`
+        containing `adapter_config.json`, `adapter_model.safetensors` (if
+        produced on GPU), `tokenizer_config.json`, and `fireworks_deployment_spec.json`.
+        """
+        grpo_dir = self.checkpoints_root / "stage3_grpo"
+        cpt_tok_dir = self.checkpoints_root / "stage1_cpt" / "extended_tokenizer"
+
+        # 1. Write Fireworks-compatible adapter_config.json pointing to Qwen/Qwen2.5-7B
+        fw_adapter_cfg = {
+            "base_model_name_or_path": "Qwen/Qwen2.5-7B",
+            "peft_type": "LORA",
+            "task_type": "CAUSAL_LM",
+            "r": 64,
+            "lora_alpha": 128,
+            "lora_dropout": 0.0,
+            "use_rslora": True,
+            "bias": "none",
+            "target_modules": [
+                "q_proj",
+                "k_proj",
+                "v_proj",
+                "o_proj",
+                "gate_proj",
+                "up_proj",
+                "down_proj",
+            ],
+        }
+        (self.fireworks_bundle_dir / "adapter_config.json").write_text(
+            json.dumps(fw_adapter_cfg, indent=2), encoding="utf-8"
+        )
+
+        # 2. Copy real GPU adapter_model.safetensors if present
+        src_safetensors = grpo_dir / "adapter_model.safetensors"
+        if src_safetensors.exists():
+            shutil.copyfile(
+                src_safetensors,
+                self.fireworks_bundle_dir / "adapter_model.safetensors",
+            )
+
+        # 3. Copy tokenizer configurations
+        for tok_fname in ("tokenizer_config.json", "added_tokens.json", "tokenizer.json"):
+            for candidate_dir in (grpo_dir, cpt_tok_dir):
+                cand = candidate_dir / tok_fname
+                if cand.exists():
+                    shutil.copyfile(cand, self.fireworks_bundle_dir / tok_fname)
+                    break
+
+        # 4. Write Fireworks deployment specification manifest
+        deployed_id = f"accounts/{self.account_id}/models/qwen2p5-7b-polymarket-grpo-v1"
+        fw_spec = {
+            "fireworks_account_id": self.account_id,
+            "deployed_model_id": deployed_id,
+            "base_model": "accounts/fireworks/models/qwen2p5-7b",
+            "peft_lora_rank": 64,
+            "peft_lora_alpha": 128,
+            "learned_bayesian_policy_weights": grpo_data.get(
+                "learned_bayesian_policy_weights", {}
+            ),
+            "firectl_deploy_commands": [
+                f"firectl create model qwen2p5-7b-polymarket-grpo-v1 {self.fireworks_bundle_dir} --base-model accounts/fireworks/models/qwen2p5-7b",
+                f"firectl deploy qwen2p5-7b-polymarket-grpo-v1",
+            ],
+        }
+        (self.fireworks_bundle_dir / "fireworks_deployment_spec.json").write_text(
+            json.dumps(fw_spec, indent=2), encoding="utf-8"
+        )
+        return self.fireworks_bundle_dir
 
     def deploy_and_update_registry(self) -> FireworksDeploymentCertificate:
         """
@@ -137,9 +224,14 @@ class FireworksLoRADeployer:
         grpo_data = json.loads(grpo_cert_path.read_text(encoding="utf-8"))
         quant_data = json.loads(quant_cert_path.read_text(encoding="utf-8"))
 
+        self._package_fireworks_lora_bundle(grpo_data)
+        deployed_id = (
+            f"accounts/{self.account_id}/models/qwen2p5-7b-polymarket-grpo-v1"
+        )
+
         bundle_bytes = json.dumps(
             {
-                "model_id": self.DEFAULT_MODEL_ID,
+                "model_id": deployed_id,
                 "grpo_policy_weights": grpo_data.get(
                     "learned_bayesian_policy_weights", {}
                 ),
@@ -160,8 +252,8 @@ class FireworksLoRADeployer:
             stage="STAGE_5_FIREWORKS_UPLOAD_DEPLOYER",
             timestamp_utc=datetime.datetime.now(datetime.timezone.utc).isoformat(),
             deployment_mode=mode,
-            fireworks_account_id="sovereign-prob-engine",
-            deployed_model_id=self.DEFAULT_MODEL_ID,
+            fireworks_account_id=self.account_id,
+            deployed_model_id=deployed_id,
             base_model_architecture="Qwen/Qwen2.5-7B",
             lora_rank_r=64,
             lora_alpha=128,

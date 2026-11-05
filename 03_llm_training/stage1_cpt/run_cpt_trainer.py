@@ -168,19 +168,53 @@ class SovereignCPTTrainer:
             signal.signal(signal.SIGUSR1, _handler)
         signal.signal(signal.SIGTERM, _handler)
 
+    def tokenize_and_mask_cpt_document(
+        self,
+        tokenizer: Any,
+        cpt_text: str,
+        max_seq_len: int = 512,
+    ) -> Tuple[List[int], List[int], float]:
+        """
+        Tokenizes a Stage 4A CPT document (`<|im_start|>system...<|im_start|>user...`)
+        and masks all system-preamble tokens prior to `<|im_start|>user\\n` with
+        `IGNORE_INDEX = -100` so Causal Language Modeling loss is computed strictly
+        on the 8 prediction-market XML blocks.
+        """
+        user_marker = "<|im_start|>user\n"
+        marker_pos = cpt_text.find(user_marker)
+        if marker_pos != -1:
+            preamble_str = cpt_text[: marker_pos + len(user_marker)]
+            body_str = cpt_text[marker_pos + len(user_marker) :]
+        else:
+            preamble_str = cpt_text[:64]
+            body_str = cpt_text[64:]
+
+        preamble_ids = tokenizer.encode(preamble_str)
+        body_ids = tokenizer.encode(body_str)
+
+        input_ids = (preamble_ids + body_ids)[:max_seq_len]
+        masked_len = min(len(preamble_ids), len(input_ids))
+        labels = (
+            [self.IGNORE_INDEX] * masked_len
+            + input_ids[masked_len:]
+        )
+        mask_pct = round((masked_len / max(1, len(input_ids))) * 100.0, 2)
+        return input_ids, labels, mask_pct
+
     # --------------------------------------------------------------------------
-    # Hardware GPU (GCP NVIDIA L4/A100 CUDA or AMD MI300X ROCm) CPT Branch
+    # Hardware GPU (2x NVIDIA L40S 96GB / L4 / A100 CUDA or AMD MI300X ROCm) CPT Branch
     # --------------------------------------------------------------------------
     def _try_run_hardware_rocm_cpt(
         self, train_rows: List[Dict[str, Any]], val_rows: List[Dict[str, Any]], num_steps: int
     ) -> Optional[Tuple[float, float, List[CPTStepLog], int]]:
         """
-        When running on a physical GPU (NVIDIA L4 24GB / A100 on GCP or AMD
-        Instinct MI300X 192GB), loads `Qwen/Qwen2.5-7B` in `torch.bfloat16`,
-        resizes token embeddings for the 43 new domain tokens, freezes interior
-        layers so optimizer states fit comfortably in 24GB VRAM, enables
-        gradient checkpointing, runs real PyTorch GPU backpropagation on the
-        CPT corpus, and saves the adapted HuggingFace model + tokenizer.
+        When running on physical GPU(s) (e.g. 2x NVIDIA L40S 96GB total VRAM,
+        NVIDIA L4/A100, or AMD Instinct MI300X 192GB), loads `Qwen/Qwen2.5-7B`
+        in `torch.bfloat16` using `device_map="auto"` across all visible GPUs,
+        resizes token embeddings for the 43 new domain tokens, selectively
+        unfreezes top decoder layers + embeddings according to total VRAM,
+        enables gradient checkpointing, runs real PyTorch GPU backpropagation
+        on the CPT corpus, and saves the adapted HuggingFace model + tokenizer.
         """
         try:
             import gc
@@ -192,12 +226,19 @@ class SovereignCPTTrainer:
         if not (getattr(torch.version, "hip", None) or torch.cuda.is_available()):
             return None
 
+        n_gpus = torch.cuda.device_count()
         gpu_name = torch.cuda.get_device_name(0)
-        vram_gib = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+        single_vram_gib = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+        total_vram_gib = sum(
+            torch.cuda.get_device_properties(i).total_memory / (1024 ** 3)
+            for i in range(n_gpus)
+        )
         logger.info(
-            "Detected Hardware GPU (%s, %.1f GiB VRAM); running BF16 CPT on Qwen/Qwen2.5-7B...",
+            "Detected %dx %s (%.1f GiB/GPU, %.1f GiB Total VRAM); running BF16 CPT on Qwen/Qwen2.5-7B...",
+            n_gpus,
             gpu_name,
-            vram_gib,
+            single_vram_gib,
+            total_vram_gib,
         )
         base_model_id = os.environ.get("SOVEREIGN_BASE_MODEL", "Qwen/Qwen2.5-7B")
         model = None
@@ -208,10 +249,16 @@ class SovereignCPTTrainer:
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
+            max_mem_map = (
+                {i: f"{int(single_vram_gib * 0.88)}GiB" for i in range(n_gpus)}
+                if n_gpus > 1
+                else None
+            )
             model = AutoModelForCausalLM.from_pretrained(
                 base_model_id,
                 torch_dtype=torch.bfloat16,
-                device_map="cuda:0",
+                device_map="auto" if n_gpus > 1 else "cuda:0",
+                max_memory=max_mem_map,
                 low_cpu_mem_usage=True,
                 trust_remote_code=True,
             )
@@ -221,19 +268,40 @@ class SovereignCPTTrainer:
             if hasattr(model, "gradient_checkpointing_enable"):
                 model.gradient_checkpointing_enable()
 
-            # Selective layer unfreezing: train newly resized embed_tokens, lm_head,
-            # norm, and top 2 decoder layers so 7B CPT fits inside 24GB L4 GPUs
-            # without 60GB AdamW state OOMs while preserving base weights.
+            # On 2x L40S (96GB VRAM) or MI300X (192GB), unfreeze the top 6 decoder
+            # layers (layers 22..27) + embed_tokens + lm_head + norm and use a
+            # 1024-token sequence window; on 24GB GPUs, unfreeze top 2 layers.
+            if total_vram_gib >= 45.0:
+                unfrozen_keys = (
+                    "embed_tokens",
+                    "lm_head",
+                    "model.norm",
+                    "layers.22.",
+                    "layers.23.",
+                    "layers.24.",
+                    "layers.25.",
+                    "layers.26.",
+                    "layers.27.",
+                )
+                seq_window = 1024
+            else:
+                unfrozen_keys = (
+                    "embed_tokens",
+                    "lm_head",
+                    "model.norm",
+                    "layers.26.",
+                    "layers.27.",
+                )
+                seq_window = 512
+
             for name, param in model.named_parameters():
-                if any(
-                    k in name
-                    for k in ("embed_tokens", "lm_head", "model.norm", "layers.26.", "layers.27.")
-                ):
+                if any(k in name for k in unfrozen_keys):
                     param.requires_grad = True
                 else:
                     param.requires_grad = False
 
             trainable_params = [p for p in model.parameters() if p.requires_grad]
+            input_device = next(model.parameters()).device
             model.train()
             optimizer = torch.optim.AdamW(trainable_params, lr=2.0e-5, weight_decay=0.01)
 
@@ -241,12 +309,12 @@ class SovereignCPTTrainer:
                 model.eval()
                 losses: List[float] = []
                 with torch.no_grad():
-                    for r in val_rows[:8]:
+                    for r in val_rows[:12]:
                         inp, lbl, _ = self.tokenize_and_mask_cpt_document(
-                            tokenizer, str(r["cpt_unsupervised_text"]), max_seq_len=512
+                            tokenizer, str(r["cpt_unsupervised_text"]), max_seq_len=seq_window
                         )
-                        t_inp = torch.tensor([inp], dtype=torch.long, device="cuda:0")
-                        t_lbl = torch.tensor([lbl], dtype=torch.long, device="cuda:0")
+                        t_inp = torch.tensor([inp], dtype=torch.long, device=input_device)
+                        t_lbl = torch.tensor([lbl], dtype=torch.long, device=input_device)
                         out = model(input_ids=t_inp, labels=t_lbl)
                         losses.append(float(out.loss.item()))
                 model.train()
@@ -258,10 +326,10 @@ class SovereignCPTTrainer:
             for step_idx in range(1, num_steps + 1):
                 row = train_rows[(step_idx - 1) % len(train_rows)]
                 inp, lbl, mask_pct = self.tokenize_and_mask_cpt_document(
-                    tokenizer, str(row["cpt_unsupervised_text"]), max_seq_len=512
+                    tokenizer, str(row["cpt_unsupervised_text"]), max_seq_len=seq_window
                 )
-                t_inp = torch.tensor([inp], dtype=torch.long, device="cuda:0")
-                t_lbl = torch.tensor([lbl], dtype=torch.long, device="cuda:0")
+                t_inp = torch.tensor([inp], dtype=torch.long, device=input_device)
+                t_lbl = torch.tensor([lbl], dtype=torch.long, device=input_device)
 
                 optimizer.zero_grad(set_to_none=True)
                 out = model(input_ids=t_inp, labels=t_lbl)
@@ -301,7 +369,6 @@ class SovereignCPTTrainer:
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
-            return None
 
     # --------------------------------------------------------------------------
     # End-to-End CPT Optimization Loop (PyTorch or Deterministic Unigram/Bigram LM)

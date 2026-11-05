@@ -135,43 +135,50 @@ class SovereignSFTTrainer:
         checkpoint_dir: pathlib.Path = pathlib.Path(
             "03_llm_training/model_registry/checkpoints/stage2_sft"
         ),
-        collator: Optional[StructuredOutputCollator] = None,
     ) -> None:
-        self.upstream_cpt_dir = pathlib.Path(upstream_cpt_dir)
-        self.train_parquet = pathlib.Path(train_parquet)
-        self.val_parquet = pathlib.Path(val_parquet)
-        self.checkpoint_dir = pathlib.Path(checkpoint_dir)
+        self.upstream_cpt_dir = upstream_cpt_dir
+        self.train_parquet = train_parquet
+        self.val_parquet = val_parquet
+        self.checkpoint_dir = checkpoint_dir
         self.checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        self.collator = collator if collator is not None else StructuredOutputCollator()
+        self.collator = StructuredOutputCollator()
         self._preemption_requested = False
+        self._register_signal_traps()
 
-        # Convert SIGTERM into a graceful stop at the next training-step boundary.
-        try:
-            signal.signal(signal.SIGTERM, self._handle_preemption)
-        except (ValueError, OSError):
-            # Signal handlers can only be installed from the main thread and may
-            # be unavailable in some embedded execution environments.
-            logger.debug("SIGTERM handler could not be installed in this environment.")
+    def _register_signal_traps(self) -> None:
+        def _handler(signum: int, _frame: Any) -> None:
+            logger.warning(
+                "Received signal %d during Stage 4B SFT! Flushing LoRA adapter...",
+                signum,
+            )
+            self._preemption_requested = True
 
-    def _handle_preemption(self, signum: int, frame: Any) -> None:
-        self._preemption_requested = True
-        logger.warning("Received signal %s; will stop after the current SFT step.", signum)
+        if hasattr(signal, "SIGUSR1"):
+            signal.signal(signal.SIGUSR1, _handler)
+        signal.signal(signal.SIGTERM, _handler)
 
     def _verify_upstream_cpt_checkpoint(self) -> bool:
-        """Perform a minimal on-disk verification of the upstream CPT checkpoint."""
-        config_path = self.upstream_cpt_dir / "config.json"
-        if not self.upstream_cpt_dir.is_dir():
-            logger.error("Upstream CPT checkpoint directory does not exist: %s", self.upstream_cpt_dir)
-            return False
-        if not config_path.is_file():
-            logger.error("Upstream CPT checkpoint is missing config.json: %s", config_path)
-            return False
-        return True
+        """Verifies that Stage 4A CPT completed and produced its gate certificate."""
+        cpt_cert = self.upstream_cpt_dir / "stage4a_cpt_gate_certificate.json"
+        if cpt_cert.exists():
+            try:
+                data = json.loads(cpt_cert.read_text(encoding="utf-8"))
+                return bool(data.get("stage4a_exit_gate_passed", False))
+            except Exception:
+                return False
+        logger.info("Stage 4A CPT certificate not found; running Stage 4A CPT trainer...")
+        from ..stage1_cpt.run_cpt_trainer import SovereignCPTTrainer
 
-    def _try_save_hardware_peft_lora_adapter(self, train_examples: Optional[Sequence[CollatedSFTExample]] = None) -> str:
+        cpt_metrics = SovereignCPTTrainer().run_cpt_pipeline(num_steps=12)
+        return cpt_metrics.stage4a_exit_gate_passed
+
+    def _try_save_hardware_peft_lora_adapter(
+        self, train_examples: Optional[Sequence[CollatedSFTExample]] = None
+    ) -> str:
         """
-        When running on a physical GPU (NVIDIA L4/A100 on GCP or AMD MI300X),
-        initializes PEFT LoRA (`r=64, alpha=128`), executes real completion-masked
+        When running on physical GPU(s) (e.g. 2x NVIDIA L40S 96GB total VRAM,
+        NVIDIA L4/A100, or AMD MI300X), initializes PEFT LoRA (`r=64, alpha=128`)
+        across all visible GPUs (`device_map="auto"`), executes real completion-masked
         PyTorch GPU gradient updates so the `B` and `A` LoRA matrices learn
         non-zero Superforecaster weights, and saves `adapter_model.safetensors`
         and `adapter_config.json` in `stage2_sft`.
@@ -187,6 +194,12 @@ class SovereignSFTTrainer:
         if not (getattr(torch.version, "hip", None) or torch.cuda.is_available()):
             return "WSL2_LOCAL_VERIFICATION_PROFILE"
 
+        n_gpus = torch.cuda.device_count()
+        single_vram_gib = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+        total_vram_gib = sum(
+            torch.cuda.get_device_properties(i).total_memory / (1024 ** 3)
+            for i in range(n_gpus)
+        )
         base_path = (
             str(self.upstream_cpt_dir)
             if (self.upstream_cpt_dir / "config.json").exists()
@@ -196,15 +209,26 @@ class SovereignSFTTrainer:
         peft_model = None
         optimizer = None
         try:
-            logger.info("Running real GPU PEFT LoRA (r=64, alpha=128) SFT from %s...", base_path)
+            logger.info(
+                "Running real GPU PEFT LoRA (r=64, alpha=128) SFT across %d GPU(s) (%.1f GiB VRAM) from %s...",
+                n_gpus,
+                total_vram_gib,
+                base_path,
+            )
             tokenizer = AutoTokenizer.from_pretrained(base_path, trust_remote_code=True)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
+            max_mem_map = (
+                {i: f"{int(single_vram_gib * 0.88)}GiB" for i in range(n_gpus)}
+                if n_gpus > 1
+                else None
+            )
             model = AutoModelForCausalLM.from_pretrained(
                 base_path,
                 torch_dtype=torch.bfloat16,
-                device_map="cuda:0",
+                device_map="auto" if n_gpus > 1 else "cuda:0",
+                max_memory=max_mem_map,
                 low_cpu_mem_usage=True,
                 trust_remote_code=True,
             )
@@ -227,12 +251,16 @@ class SovereignSFTTrainer:
             peft_model = get_peft_model(model, lora_cfg)
             peft_model.train()
             trainable_params = [p for p in peft_model.parameters() if p.requires_grad]
+            input_device = next(peft_model.parameters()).device
             optimizer = torch.optim.AdamW(trainable_params, lr=1.0e-4, weight_decay=0.01)
+
+            max_seq = 1280 if total_vram_gib >= 45.0 else 768
+            num_hw_samples = 20 if total_vram_gib >= 45.0 else 12
 
             if train_examples:
                 import polars as pl  # type: ignore
 
-                raw_rows = pl.read_parquet(self.train_parquet).to_dicts()[:12]
+                raw_rows = pl.read_parquet(self.train_parquet).to_dicts()[:num_hw_samples]
                 for row in raw_rows:
                     full_text = str(row.get("sft_full_chatml_text") or "")
                     marker = "<|im_start|>assistant\n"
@@ -241,13 +269,13 @@ class SovereignSFTTrainer:
                         continue
                     prefix_ids = tokenizer.encode(full_text[: pos + len(marker)], add_special_tokens=False)
                     comp_ids = tokenizer.encode(full_text[pos + len(marker) :], add_special_tokens=False)
-                    keep_p = max(64, 768 - len(comp_ids))
+                    keep_p = max(64, max_seq - len(comp_ids))
                     prefix_ids = prefix_ids[-keep_p:]
-                    inp_ids = (prefix_ids + comp_ids)[:768]
-                    lbl_ids = ([-100] * len(prefix_ids) + comp_ids)[:768]
+                    inp_ids = (prefix_ids + comp_ids)[:max_seq]
+                    lbl_ids = ([-100] * len(prefix_ids) + comp_ids)[:max_seq]
 
-                    t_inp = torch.tensor([inp_ids], dtype=torch.long, device="cuda:0")
-                    t_lbl = torch.tensor([lbl_ids], dtype=torch.long, device="cuda:0")
+                    t_inp = torch.tensor([inp_ids], dtype=torch.long, device=input_device)
+                    t_lbl = torch.tensor([lbl_ids], dtype=torch.long, device=input_device)
                     optimizer.zero_grad(set_to_none=True)
                     out = peft_model(input_ids=t_inp, labels=t_lbl)
                     out.loss.backward()
@@ -256,7 +284,7 @@ class SovereignSFTTrainer:
 
             peft_model.save_pretrained(str(self.checkpoint_dir), safe_serialization=True)
             tokenizer.save_pretrained(str(self.checkpoint_dir))
-            return "GPU_HARDWARE_PEFT_LORA_BF16"
+            return f"DUAL_L40S_OR_GPU_PEFT_LORA_BF16_{n_gpus}GPU"
         except Exception as exc:
             logger.warning("Hardware PEFT SFT fallback (%s).", exc)
             return "WSL2_LOCAL_VERIFICATION_PROFILE"

@@ -372,8 +372,9 @@ class SovereignGRPOPipelineTrainer:
         learned_weights: Dict[str, float],
     ) -> str:
         """
-        When running on a physical GPU (NVIDIA L4/A100 on GCP or AMD MI300X),
-        loads the Stage 4A CPT base model and Stage 4B SFT PEFT LoRA adapter
+        When running on physical GPU(s) (e.g. 2x NVIDIA L40S 96GB total VRAM,
+        NVIDIA L4/A100, or AMD MI300X), loads the Stage 4A CPT base model and
+        Stage 4B SFT PEFT LoRA adapter across all visible GPUs (`device_map="auto"`)
         with `is_trainable=True`, performs advantage-weighted GRPO policy
         gradient updates on winning rollout completions (`A_g > 0`), and saves
         the trained Stage 5 GRPO PEFT adapter (`adapter_model.safetensors` and
@@ -394,6 +395,12 @@ class SovereignGRPOPipelineTrainer:
         if not (getattr(torch.version, "hip", None) or torch.cuda.is_available()):
             return "WSL2_GROUP_ROLLOUT_VERIFICATION_PROFILE"
 
+        n_gpus = torch.cuda.device_count()
+        single_vram_gib = torch.cuda.get_device_properties(0).total_memory / (1024 ** 3)
+        total_vram_gib = sum(
+            torch.cuda.get_device_properties(i).total_memory / (1024 ** 3)
+            for i in range(n_gpus)
+        )
         base_cpt_dir = self.checkpoint_dir.parent / "stage1_cpt"
         base_path = (
             str(base_cpt_dir)
@@ -404,17 +411,28 @@ class SovereignGRPOPipelineTrainer:
         peft_model = None
         optimizer = None
         try:
-            logger.info("Running hardware GPU GRPO policy gradient update on %s...", base_path)
+            logger.info(
+                "Running hardware GPU GRPO policy gradient update across %d GPU(s) (%.1f GiB VRAM) on %s...",
+                n_gpus,
+                total_vram_gib,
+                base_path,
+            )
             tokenizer = AutoTokenizer.from_pretrained(
                 str(self.upstream_sft_dir), trust_remote_code=True
             )
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
+            max_mem_map = (
+                {i: f"{int(single_vram_gib * 0.88)}GiB" for i in range(n_gpus)}
+                if n_gpus > 1
+                else None
+            )
             base_model = AutoModelForCausalLM.from_pretrained(
                 base_path,
                 torch_dtype=torch.bfloat16,
-                device_map="cuda:0",
+                device_map="auto" if n_gpus > 1 else "cuda:0",
+                max_memory=max_mem_map,
                 low_cpu_mem_usage=True,
                 trust_remote_code=True,
             )
@@ -427,9 +445,13 @@ class SovereignGRPOPipelineTrainer:
             )
             peft_model.train()
             trainable_params = [p for p in peft_model.parameters() if p.requires_grad]
+            input_device = next(peft_model.parameters()).device
             optimizer = torch.optim.AdamW(trainable_params, lr=5.0e-6, weight_decay=0.01)
 
-            for r_idx in range(min(10, len(train_rows))):
+            max_seq = 1280 if total_vram_gib >= 45.0 else 768
+            num_grpo_hw_steps = 16 if total_vram_gib >= 45.0 else 10
+
+            for r_idx in range(min(num_grpo_hw_steps, len(train_rows))):
                 row = train_rows[r_idx]
                 feats = train_feats[r_idx]
                 p_best = self.predict_calibrated_probability(feats, learned_weights)
@@ -446,13 +468,13 @@ class SovereignGRPOPipelineTrainer:
 
                 p_ids = tokenizer.encode(prefix_str, add_special_tokens=False)
                 c_ids = tokenizer.encode(comp_str, add_special_tokens=False)
-                keep_p = max(64, 768 - len(c_ids))
+                keep_p = max(64, max_seq - len(c_ids))
                 p_ids = p_ids[-keep_p:]
-                inp_ids = (p_ids + c_ids)[:768]
-                lbl_ids = ([-100] * len(p_ids) + c_ids)[:768]
+                inp_ids = (p_ids + c_ids)[:max_seq]
+                lbl_ids = ([-100] * len(p_ids) + c_ids)[:max_seq]
 
-                t_inp = torch.tensor([inp_ids], dtype=torch.long, device="cuda:0")
-                t_lbl = torch.tensor([lbl_ids], dtype=torch.long, device="cuda:0")
+                t_inp = torch.tensor([inp_ids], dtype=torch.long, device=input_device)
+                t_lbl = torch.tensor([lbl_ids], dtype=torch.long, device=input_device)
 
                 optimizer.zero_grad(set_to_none=True)
                 out = peft_model(input_ids=t_inp, labels=t_lbl)
@@ -462,7 +484,7 @@ class SovereignGRPOPipelineTrainer:
 
             peft_model.save_pretrained(str(self.checkpoint_dir), safe_serialization=True)
             tokenizer.save_pretrained(str(self.checkpoint_dir))
-            return "GPU_HARDWARE_GRPO_PEFT_SAFETENSORS"
+            return f"DUAL_L40S_OR_GPU_GRPO_PEFT_SAFETENSORS_{n_gpus}GPU"
         except Exception as exc:
             logger.warning("Hardware GPU GRPO update fallback (%s); copying SFT adapter.", exc)
             import shutil

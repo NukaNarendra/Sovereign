@@ -142,6 +142,7 @@ class TestSovereignRepositoryAudit(unittest.TestCase):
         sh_targets = [
             REPO_ROOT / "03_llm_training/model_registry/export_awq_gguf.sh",
             REPO_ROOT / "00_infra_bootstrap/gcp_gpu_cluster/run_gcp_cuda_training.sh",
+            REPO_ROOT / "00_infra_bootstrap/gcp_gpu_cluster/run_dual_l40s_training.sh",
         ]
         for sh_path in sh_targets:
             self.assertTrue(sh_path.exists(), f"Missing script: {sh_path}")
