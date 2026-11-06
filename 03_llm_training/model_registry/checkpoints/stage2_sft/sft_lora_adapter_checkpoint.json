@@ -2,6 +2,7 @@
   "base_model": "Qwen/Qwen2.5-7B",
   "upstream_cpt_checkpoint": "03_llm_training/model_registry/checkpoints/stage1_cpt",
   "stage": "STAGE_4B_SFT_SUPERFORECASTER_LORA",
+  "execution_profile": "DUAL_L40S_OR_GPU_PEFT_LORA_BF16_2GPU",
   "peft_type": "LORA",
   "lora_r": 64,
   "lora_alpha": 128,
@@ -18,9 +19,9 @@
     "embed_tokens",
     "lm_head"
   ],
-  "final_val_completion_loss": 1.5292,
-  "final_val_completion_perplexity": 4.6145,
+  "final_val_completion_loss": 1.32998,
+  "final_val_completion_perplexity": 3.781,
   "val_xml_schema_compliance_pct": 100.0,
   "val_algebraic_edge_consistency_pct": 100.0,
-  "timestamp_utc": "2026-11-01T08:45:09.232309+00:00"
+  "timestamp_utc": "2026-11-05T13:08:23.211034+00:00"
 }

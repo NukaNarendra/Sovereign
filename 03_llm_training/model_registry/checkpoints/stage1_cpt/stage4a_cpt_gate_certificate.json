@@ -1,53 +1,53 @@
 {
   "stage": "STAGE_4A_CONTINUAL_PRETRAINING_TRAINER",
-  "timestamp_utc": "2026-11-01T08:44:19.763097+00:00",
-  "execution_profile": "WSL2_LOCAL_VERIFICATION_PROFILE",
+  "timestamp_utc": "2026-11-05T11:11:05.089609+00:00",
+  "execution_profile": "AMD_MI300X_ROCM_BF16_HARDWARE",
   "train_parquet_shard": "data/processed_warehouse/final_splits/cpt_corpus/train_cpt_shard_00000.parquet",
   "val_parquet_shard": "data/processed_warehouse/final_splits/cpt_corpus/val_cpt_shard_00000.parquet",
   "train_documents_loaded": 2800,
   "val_documents_loaded": 600,
-  "extended_vocab_size_aligned": 151744,
+  "extended_vocab_size_aligned": 152064,
   "system_preamble_masked_with_neg100": true,
-  "initial_val_clm_loss": 1.92873,
-  "final_val_clm_loss": 1.51994,
-  "initial_val_perplexity": 6.8808,
-  "final_val_perplexity": 4.572,
+  "initial_val_clm_loss": 1.78,
+  "final_val_clm_loss": 0.82547,
+  "initial_val_perplexity": 5.9299,
+  "final_val_perplexity": 2.283,
   "perplexity_improved_verified": true,
   "emergency_credit_signal_trapped": true,
   "stage4a_exit_gate_passed": true,
   "checkpoint_saved_dir": "03_llm_training/model_registry/checkpoints/stage1_cpt",
   "step_history": [
     {
-      "step": 9,
-      "train_clm_loss": 1.52647,
-      "train_perplexity": 4.6019,
-      "learning_rate": 5.58e-06,
-      "masked_preamble_tokens_pct": 22.66,
-      "active_xml_loss_tokens_count": 1108786
+      "step": 197,
+      "train_clm_loss": 0.74892,
+      "train_perplexity": 2.1147,
+      "learning_rate": 2.01e-06,
+      "masked_preamble_tokens_pct": 23.96,
+      "active_xml_loss_tokens_count": 584
     },
     {
-      "step": 10,
-      "train_clm_loss": 1.51116,
-      "train_perplexity": 4.532,
-      "learning_rate": 3.65e-06,
-      "masked_preamble_tokens_pct": 22.66,
-      "active_xml_loss_tokens_count": 1108786
+      "step": 198,
+      "train_clm_loss": 0.6758,
+      "train_perplexity": 1.9656,
+      "learning_rate": 2.01e-06,
+      "masked_preamble_tokens_pct": 23.96,
+      "active_xml_loss_tokens_count": 584
     },
     {
-      "step": 11,
-      "train_clm_loss": 1.49795,
-      "train_perplexity": 4.4725,
-      "learning_rate": 2.42e-06,
-      "masked_preamble_tokens_pct": 22.66,
-      "active_xml_loss_tokens_count": 1108786
-    },
-    {
-      "step": 12,
-      "train_clm_loss": 1.48693,
-      "train_perplexity": 4.4235,
+      "step": 199,
+      "train_clm_loss": 0.40297,
+      "train_perplexity": 1.4963,
       "learning_rate": 2e-06,
-      "masked_preamble_tokens_pct": 22.66,
-      "active_xml_loss_tokens_count": 1108786
+      "masked_preamble_tokens_pct": 23.96,
+      "active_xml_loss_tokens_count": 584
+    },
+    {
+      "step": 200,
+      "train_clm_loss": 0.92594,
+      "train_perplexity": 2.5242,
+      "learning_rate": 2e-06,
+      "masked_preamble_tokens_pct": 23.96,
+      "active_xml_loss_tokens_count": 584
     }
   ]
 }

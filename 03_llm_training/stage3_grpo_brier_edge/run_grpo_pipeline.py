@@ -401,89 +401,244 @@ class SovereignGRPOPipelineTrainer:
             torch.cuda.get_device_properties(i).total_memory / (1024 ** 3)
             for i in range(n_gpus)
         )
-        base_cpt_dir = self.checkpoint_dir.parent / "stage1_cpt"
-        base_path = (
-            str(base_cpt_dir)
-            if (base_cpt_dir / "config.json").exists()
-            else os.environ.get("SOVEREIGN_BASE_MODEL", "Qwen/Qwen2.5-7B")
-        )
+        base_path = os.environ.get("SOVEREIGN_BASE_MODEL", "Qwen/Qwen2.5-7B")
+        resume_state_path = self.checkpoint_dir / "grpo_resume_state.json"
+        grpo_adapter_path = self.checkpoint_dir / "adapter_model.safetensors"
+        save_every_steps = int(os.environ.get("SAVE_EVERY_STEPS", "50"))
+        force_restart = os.environ.get("FORCE_RESTART", "0") == "1"
+        num_grpo_hw_steps = int(os.environ.get("GRPO_STEPS", "200"))
+
+        start_step = 1
+        if (
+            not force_restart
+            and resume_state_path.exists()
+            and grpo_adapter_path.exists()
+        ):
+            try:
+                prev_state = json.loads(resume_state_path.read_text(encoding="utf-8"))
+                last_done = int(prev_state.get("last_completed_step", 0))
+                if last_done >= num_grpo_hw_steps:
+                    logger.info(
+                        "[GRPO-RESUME] Stage 5 GRPO already completed (%d/%d steps) in %s; reusing saved GRPO adapter!",
+                        last_done,
+                        num_grpo_hw_steps,
+                        self.checkpoint_dir,
+                    )
+                    return f"DUAL_L40S_OR_GPU_GRPO_PEFT_SAFETENSORS_{n_gpus}GPU_RESUMED"
+                start_step = last_done + 1
+            except Exception:
+                start_step = 1
+
         base_model = None
         peft_model = None
         optimizer = None
         try:
             logger.info(
-                "Running hardware GPU GRPO policy gradient update across %d GPU(s) (%.1f GiB VRAM) on %s...",
+                "Running hardware GPU GRPO policy gradient update across %d GPU(s) (%.1f GiB VRAM) on %s (steps %d..%d)...",
                 n_gpus,
                 total_vram_gib,
                 base_path,
+                start_step,
+                num_grpo_hw_steps,
             )
+            base_hf_id = os.environ.get("SOVEREIGN_BASE_MODEL", "Qwen/Qwen2.5-7B")
             tokenizer = AutoTokenizer.from_pretrained(
-                str(self.upstream_sft_dir), trust_remote_code=True
+                base_hf_id, trust_remote_code=True
             )
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
-            max_mem_map = (
-                {i: f"{int(single_vram_gib * 0.88)}GiB" for i in range(n_gpus)}
-                if n_gpus > 1
-                else None
+            target_device_map: Any = (
+                {"": "cuda:0"}
+                if single_vram_gib >= 22.0 or n_gpus == 1
+                else "auto"
             )
             base_model = AutoModelForCausalLM.from_pretrained(
                 base_path,
                 torch_dtype=torch.bfloat16,
-                device_map="auto" if n_gpus > 1 else "cuda:0",
-                max_memory=max_mem_map,
+                device_map=target_device_map,
                 low_cpu_mem_usage=True,
                 trust_remote_code=True,
             )
+            vocab_limit = int(base_model.get_output_embeddings().weight.shape[0])
             base_model.config.use_cache = False
             if hasattr(base_model, "gradient_checkpointing_enable"):
                 base_model.gradient_checkpointing_enable()
 
+            adapter_load_dir = (
+                str(self.checkpoint_dir)
+                if (start_step > 1 and grpo_adapter_path.exists())
+                else str(self.upstream_sft_dir)
+            )
+            if start_step > 1 and grpo_adapter_path.exists():
+                logger.info(
+                    "[GRPO-RESUME] Resuming GRPO adapter from %s at step %d...",
+                    self.checkpoint_dir,
+                    start_step,
+                )
             peft_model = PeftModel.from_pretrained(
-                base_model, str(self.upstream_sft_dir), is_trainable=True
+                base_model, adapter_load_dir, is_trainable=True
             )
             peft_model.train()
             trainable_params = [p for p in peft_model.parameters() if p.requires_grad]
-            input_device = next(peft_model.parameters()).device
-            optimizer = torch.optim.AdamW(trainable_params, lr=5.0e-6, weight_decay=0.01)
+            input_device = torch.device("cuda:0")
+            peak_lr = 5.0e-6
+            optimizer = torch.optim.AdamW(trainable_params, lr=peak_lr, weight_decay=0.01)
 
-            max_seq = 1280 if total_vram_gib >= 45.0 else 768
-            num_grpo_hw_steps = 16 if total_vram_gib >= 45.0 else 10
+            max_seq = 2560 if single_vram_gib >= 35.0 else 1536
+            grad_accum = 4
+            optimizer.zero_grad(set_to_none=True)
 
-            for r_idx in range(min(num_grpo_hw_steps, len(train_rows))):
-                row = train_rows[r_idx]
-                feats = train_feats[r_idx]
-                p_best = self.predict_calibrated_probability(feats, learned_weights)
-                comp_best = self.build_rollout_completion(row, feats, p_best)
-
-                sys_p = str(row.get("system_prompt") or "")
-                usr_p = str(row.get("user_prompt") or "")
-                prefix_str = (
-                    f"<|im_start|>system\n{sys_p}<|im_end|>\n"
-                    f"<|im_start|>user\n{usr_p}<|im_end|>\n"
-                    f"<|im_start|>assistant\n"
+            def _save_grpo_checkpoint(completed_step: int, last_loss: float) -> None:
+                peft_model.save_pretrained(
+                    str(self.checkpoint_dir), safe_serialization=True
                 )
-                comp_str = f"{comp_best}<|im_end|>"
+                tokenizer.save_pretrained(str(self.checkpoint_dir))
+                state_payload = {
+                    "stage": "STAGE_5_GRPO",
+                    "last_completed_step": completed_step,
+                    "target_steps": num_grpo_hw_steps,
+                    "last_advantage_weighted_loss": round(last_loss, 5),
+                    "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                }
+                tmp_p = resume_state_path.with_suffix(".json.tmp")
+                tmp_p.write_text(json.dumps(state_payload, indent=2), encoding="utf-8")
+                tmp_p.replace(resume_state_path)
+                logger.info(
+                    "[GRPO-CHECKPOINT] Saved resumable GRPO LoRA checkpoint at step %d/%d -> %s",
+                    completed_step,
+                    num_grpo_hw_steps,
+                    self.checkpoint_dir,
+                )
 
-                p_ids = tokenizer.encode(prefix_str, add_special_tokens=False)
-                c_ids = tokenizer.encode(comp_str, add_special_tokens=False)
-                keep_p = max(64, max_seq - len(c_ids))
-                p_ids = p_ids[-keep_p:]
-                inp_ids = (p_ids + c_ids)[:max_seq]
-                lbl_ids = ([-100] * len(p_ids) + c_ids)[:max_seq]
+            accum_loss = 0.0
+            for step_idx in range(start_step, num_grpo_hw_steps + 1):
+                prog = step_idx / float(max(1, num_grpo_hw_steps))
+                cur_lr = (
+                    peak_lr * (prog / 0.10)
+                    if prog < 0.10
+                    else peak_lr * (0.10 + 0.90 * 0.5 * (1.0 + math.cos(math.pi * (prog - 0.10) / 0.90)))
+                )
+                for pg in optimizer.param_groups:
+                    pg["lr"] = cur_lr
 
-                t_inp = torch.tensor([inp_ids], dtype=torch.long, device=input_device)
-                t_lbl = torch.tensor([lbl_ids], dtype=torch.long, device=input_device)
+                accum_loss = 0.0
+                for micro_idx in range(grad_accum):
+                    r_idx = ((step_idx - 1) * grad_accum + micro_idx) % len(train_rows)
+                    row = train_rows[r_idx]
+                    feats = train_feats[r_idx]
+                    o_val = int(row["resolved_binary_outcome"])
+                    q_t = feats["q_t"]
 
-                optimizer.zero_grad(set_to_none=True)
-                out = peft_model(input_ids=t_inp, labels=t_lbl)
-                out.loss.backward()
+                    best_comp = ""
+                    best_reward = -1e9
+                    all_rewards: List[float] = []
+
+                    for g_idx in range(4):
+                        delta = (g_idx - 1.5) * 0.035
+                        p_cand = self.predict_calibrated_probability(
+                            feats, learned_weights, exploration_delta=delta
+                        )
+                        comp_cand = self.build_rollout_completion(row, feats, p_cand)
+                        r_b = self.brier_reward_fn.evaluate_single_forecast(
+                            comp_cand, o_val, q_t
+                        ).total_brier_reward
+                        r_c = self.clob_edge_reward_fn.evaluate_single_rollout(
+                            comp_cand,
+                            o_val,
+                            q_t,
+                            feats["spread_st"],
+                            feats["min_edge"],
+                            bool(row["safe_for_survival_5usd_bot"]),
+                            feats["uma_hazard"],
+                        ).total_clob_edge_reward
+                        r_x = self.xml_format_reward_fn.evaluate_single_completion(
+                            comp_cand, q_t
+                        ).total_format_reward
+                        r_tot = r_b + r_c + r_x
+                        all_rewards.append(r_tot)
+                        if r_tot > best_reward:
+                            best_reward = r_tot
+                            best_comp = comp_cand
+
+                    mean_r = sum(all_rewards) / len(all_rewards)
+                    std_r = math.sqrt(
+                        sum((r - mean_r) ** 2 for r in all_rewards) / len(all_rewards)
+                    )
+                    advantage_weight = max(
+                        0.25, min(2.50, (best_reward - mean_r) / (std_r + 1e-4))
+                    )
+
+                    sys_p = str(row.get("system_prompt") or "")
+                    usr_p = str(row.get("user_prompt") or "")
+                    prefix_str = (
+                        f"<|im_start|>system\n{sys_p}<|im_end|>\n"
+                        f"<|im_start|>user\n{usr_p}<|im_end|>\n"
+                        f"<|im_start|>assistant\n"
+                    )
+                    comp_str = f"{best_comp}<|im_end|>"
+
+                    p_ids = tokenizer.encode(prefix_str, add_special_tokens=False)
+                    c_ids = tokenizer.encode(comp_str, add_special_tokens=False)
+                    if not c_ids:
+                        continue
+                    keep_p = max(256, max_seq - len(c_ids))
+                    if len(p_ids) > keep_p:
+                        head_p = keep_p - 256
+                        p_ids = p_ids[:head_p] + p_ids[-256:]
+                    raw_inp = (p_ids + c_ids)[:max_seq]
+                    raw_lbl = ([-100] * len(p_ids) + c_ids)[:max_seq]
+
+                    inp_ids = [
+                        int(t) if (0 <= int(t) < vocab_limit) else 0 for t in raw_inp
+                    ]
+                    lbl_ids = [
+                        int(t) if (0 <= int(t) < vocab_limit) else -100 for t in raw_lbl
+                    ]
+                    if all(x == -100 for x in lbl_ids[1:]):
+                        continue
+
+                    t_inp = torch.tensor([inp_ids], dtype=torch.long, device=input_device)
+                    t_lbl = torch.tensor([lbl_ids], dtype=torch.long, device=input_device)
+
+                    out = peft_model(input_ids=t_inp, use_cache=False)
+                    logits = out.logits
+                    shift_logits = (
+                        logits[:, :-1, :].contiguous().float().view(-1, logits.size(-1))
+                    )
+                    shift_labels = (
+                        t_lbl[:, 1:].contiguous().view(-1).to(shift_logits.device)
+                    )
+                    ce_loss = torch.nn.functional.cross_entropy(
+                        shift_logits, shift_labels, ignore_index=-100
+                    )
+                    weighted_grpo_loss = (advantage_weight * ce_loss) / float(grad_accum)
+                    weighted_grpo_loss.backward()
+                    accum_loss += float(weighted_grpo_loss.item())
+
                 torch.nn.utils.clip_grad_norm_(trainable_params, 0.5)
                 optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
 
-            peft_model.save_pretrained(str(self.checkpoint_dir), safe_serialization=True)
-            tokenizer.save_pretrained(str(self.checkpoint_dir))
+                if step_idx % 25 == 0 or step_idx == num_grpo_hw_steps:
+                    logger.info(
+                        "[GRPO-GPU] Step %d/%d (Rollouts scored: %d) | Advantage-Weighted Loss: %.4f | LR: %.2e",
+                        step_idx,
+                        num_grpo_hw_steps,
+                        step_idx * grad_accum * 4,
+                        accum_loss,
+                        cur_lr,
+                    )
+
+                if self._preemption_requested:
+                    logger.warning("Preemption signal caught at GRPO step %d; saving checkpoint!", step_idx)
+                    _save_grpo_checkpoint(step_idx, accum_loss)
+                    break
+
+                if step_idx % save_every_steps == 0 and step_idx < num_grpo_hw_steps:
+                    _save_grpo_checkpoint(step_idx, accum_loss)
+
+            _save_grpo_checkpoint(num_grpo_hw_steps, accum_loss)
             return f"DUAL_L40S_OR_GPU_GRPO_PEFT_SAFETENSORS_{n_gpus}GPU"
         except Exception as exc:
             logger.warning("Hardware GPU GRPO update fallback (%s); copying SFT adapter.", exc)
@@ -494,12 +649,15 @@ class SovereignGRPOPipelineTrainer:
             )
             return "GPU_HARDWARE_GRPO_PEFT_SAFETENSORS"
         finally:
-            del optimizer
-            del peft_model
-            del base_model
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            try:
+                del optimizer
+                del peft_model
+                del base_model
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
 
     # --------------------------------------------------------------------------
     # End-to-End Stage 5 GRPO Group Rollout & Policy Gradient Loop
@@ -870,7 +1028,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Sovereign Probability Engine — Stage 5 GRPO Pipeline Trainer"
     )
-    parser.add_argument("--steps", type=int, default=20)
+    default_steps = int(os.environ.get("GRPO_STEPS", "20"))
+    parser.add_argument("--steps", type=int, default=default_steps)
     args = parser.parse_args()
 
     trainer = SovereignGRPOPipelineTrainer()

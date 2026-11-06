@@ -1,6 +1,6 @@
 {
   "stage": "STAGE_5_EXPECTED_CALIBRATION_ERROR_BENCHMARK",
-  "timestamp_utc": "2026-11-01T08:45:13.289278+00:00",
+  "timestamp_utc": "2026-11-05T10:18:52.167955+00:00",
   "test_parquet_shard": "data/processed_warehouse/final_splits/grpo_verifiable/test_grpo_shard_00000.parquet",
   "total_test_forecasts": 600,
   "overall_test_yes_base_rate": 0.2867,

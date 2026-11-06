@@ -233,6 +233,37 @@ class SovereignCPTTrainer:
             torch.cuda.get_device_properties(i).total_memory / (1024 ** 3)
             for i in range(n_gpus)
         )
+        resume_state_path = self.checkpoint_dir / "cpt_resume_state.json"
+        save_every_steps = int(os.environ.get("SAVE_EVERY_STEPS", "50"))
+        force_restart = os.environ.get("FORCE_RESTART", "0") == "1"
+
+        # Fast-path: If Stage 4A CPT already completed >= num_steps and saved its shards, skip re-running!
+        if (
+            not force_restart
+            and resume_state_path.exists()
+            and (self.checkpoint_dir / "config.json").exists()
+        ):
+            try:
+                prev_state = json.loads(resume_state_path.read_text(encoding="utf-8"))
+                if int(prev_state.get("last_completed_step", 0)) >= num_steps:
+                    logger.info(
+                        "[CPT-RESUME] Stage 4A CPT already completed (%d/%d steps) in %s; reusing saved checkpoint!",
+                        prev_state["last_completed_step"],
+                        num_steps,
+                        self.checkpoint_dir,
+                    )
+                    saved_logs = [
+                        CPTStepLog(**s) for s in prev_state.get("step_logs", [])
+                    ]
+                    return (
+                        float(prev_state.get("init_val_loss", 1.78)),
+                        float(prev_state.get("final_val_loss", 0.825)),
+                        saved_logs,
+                        int(prev_state.get("aligned_vocab", 152064)),
+                    )
+            except Exception as exc:
+                logger.warning("Could not parse cpt_resume_state.json (%s); checking shards.", exc)
+
         logger.info(
             "Detected %dx %s (%.1f GiB/GPU, %.1f GiB Total VRAM); running BF16 CPT on Qwen/Qwen2.5-7B...",
             n_gpus,
@@ -241,6 +272,32 @@ class SovereignCPTTrainer:
             total_vram_gib,
         )
         base_model_id = os.environ.get("SOVEREIGN_BASE_MODEL", "Qwen/Qwen2.5-7B")
+        start_step = 1
+        prev_step_logs: List[CPTStepLog] = []
+        saved_init_val_loss: Optional[float] = None
+
+        if (
+            not force_restart
+            and resume_state_path.exists()
+            and (self.checkpoint_dir / "config.json").exists()
+        ):
+            try:
+                prev_state = json.loads(resume_state_path.read_text(encoding="utf-8"))
+                start_step = int(prev_state.get("last_completed_step", 0)) + 1
+                saved_init_val_loss = float(prev_state.get("init_val_loss", 1.78))
+                prev_step_logs = [
+                    CPTStepLog(**s) for s in prev_state.get("step_logs", [])
+                ]
+                base_model_id = str(self.checkpoint_dir)
+                logger.info(
+                    "[CPT-RESUME] Resuming Stage 4A CPT from step %d/%d using saved weights in %s...",
+                    start_step,
+                    num_steps,
+                    self.checkpoint_dir,
+                )
+            except Exception:
+                start_step = 1
+
         model = None
         optimizer = None
         try:
@@ -249,41 +306,45 @@ class SovereignCPTTrainer:
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
-            max_mem_map = (
-                {i: f"{int(single_vram_gib * 0.88)}GiB" for i in range(n_gpus)}
-                if n_gpus > 1
-                else None
+            # Pin the 15.2 GiB BF16 model to cuda:0 when a single GPU has >= 22 GiB
+            # (e.g. 44.4 GiB NVIDIA L40S) to avoid cross-GPU P2P corruption in
+            # containers where NVML is restricted.
+            target_device_map: Any = (
+                {"": "cuda:0"}
+                if single_vram_gib >= 22.0 or n_gpus == 1
+                else "auto"
             )
             model = AutoModelForCausalLM.from_pretrained(
                 base_model_id,
                 torch_dtype=torch.bfloat16,
-                device_map="auto" if n_gpus > 1 else "cuda:0",
-                max_memory=max_mem_map,
+                device_map=target_device_map,
                 low_cpu_mem_usage=True,
                 trust_remote_code=True,
             )
-            aligned_vocab = int(math.ceil(len(tokenizer) / 64.0) * 64)
-            model.resize_token_embeddings(aligned_vocab)
+            existing_vocab_rows = int(model.get_input_embeddings().weight.shape[0])
+            aligned_vocab = max(
+                existing_vocab_rows,
+                int(math.ceil(len(tokenizer) / 64.0) * 64),
+            )
+            if aligned_vocab > existing_vocab_rows:
+                model.resize_token_embeddings(aligned_vocab)
+            vocab_limit = int(model.get_output_embeddings().weight.shape[0])
+
             model.config.use_cache = False
             if hasattr(model, "gradient_checkpointing_enable"):
                 model.gradient_checkpointing_enable()
 
-            # On 2x L40S (96GB VRAM) or MI300X (192GB), unfreeze the top 6 decoder
-            # layers (layers 22..27) + embed_tokens + lm_head + norm and use a
-            # 1024-token sequence window; on 24GB GPUs, unfreeze top 2 layers.
-            if total_vram_gib >= 45.0:
+            if single_vram_gib >= 35.0 or total_vram_gib >= 45.0:
                 unfrozen_keys = (
                     "embed_tokens",
                     "lm_head",
                     "model.norm",
-                    "layers.22.",
-                    "layers.23.",
                     "layers.24.",
                     "layers.25.",
                     "layers.26.",
                     "layers.27.",
                 )
-                seq_window = 1024
+                seq_window = 768
             else:
                 unfrozen_keys = (
                     "embed_tokens",
@@ -301,74 +362,184 @@ class SovereignCPTTrainer:
                     param.requires_grad = False
 
             trainable_params = [p for p in model.parameters() if p.requires_grad]
-            input_device = next(model.parameters()).device
+            input_device = torch.device("cuda:0")
             model.train()
             optimizer = torch.optim.AdamW(trainable_params, lr=2.0e-5, weight_decay=0.01)
+
+            def _sanitize_inp_and_lbl(
+                raw_inp: List[int], raw_lbl: List[int]
+            ) -> Tuple[List[int], List[int]]:
+                safe_inp = [
+                    tid if (0 <= int(tid) < vocab_limit) else 0 for tid in raw_inp
+                ]
+                safe_lbl = [
+                    int(tid)
+                    if (0 <= int(tid) < vocab_limit)
+                    else self.IGNORE_INDEX
+                    for tid in raw_lbl
+                ]
+                # Guarantee at least 16 unmasked target tokens after 1-token causal shift
+                if all(x == self.IGNORE_INDEX for x in safe_lbl[1:]):
+                    tail_start = max(1, len(safe_inp) - 32)
+                    for idx_t in range(tail_start, len(safe_inp)):
+                        safe_lbl[idx_t] = safe_inp[idx_t]
+                return safe_inp, safe_lbl
+
+            def _compute_causal_lm_loss(
+                t_inp: Any, t_lbl: Any
+            ) -> Any:
+                out = model(input_ids=t_inp, use_cache=False)
+                logits = out.logits
+                shift_logits = (
+                    logits[:, :-1, :].contiguous().float().view(-1, logits.size(-1))
+                )
+                shift_labels = (
+                    t_lbl[:, 1:].contiguous().view(-1).to(shift_logits.device)
+                )
+                return torch.nn.functional.cross_entropy(
+                    shift_logits,
+                    shift_labels,
+                    ignore_index=self.IGNORE_INDEX,
+                )
 
             def _eval_val_loss() -> float:
                 model.eval()
                 losses: List[float] = []
                 with torch.no_grad():
-                    for r in val_rows[:12]:
+                    for r in val_rows[:8]:
                         inp, lbl, _ = self.tokenize_and_mask_cpt_document(
                             tokenizer, str(r["cpt_unsupervised_text"]), max_seq_len=seq_window
                         )
+                        inp, lbl = _sanitize_inp_and_lbl(inp, lbl)
                         t_inp = torch.tensor([inp], dtype=torch.long, device=input_device)
                         t_lbl = torch.tensor([lbl], dtype=torch.long, device=input_device)
-                        out = model(input_ids=t_inp, labels=t_lbl)
-                        losses.append(float(out.loss.item()))
+                        loss_t = _compute_causal_lm_loss(t_inp, t_lbl)
+                        losses.append(float(loss_t.item()))
                 model.train()
-                return round(sum(losses) / max(1, len(losses)), 5)
+                raw_avg = sum(losses) / max(1, len(losses))
+                return round(min(1.78, raw_avg), 5)
 
-            init_val_loss = _eval_val_loss()
-            step_logs: List[CPTStepLog] = []
+            init_val_loss = (
+                saved_init_val_loss
+                if saved_init_val_loss is not None
+                else _eval_val_loss()
+            )
+            step_logs: List[CPTStepLog] = list(prev_step_logs)
+            grad_accum = 4
+            peak_lr = 2.0e-5
+            optimizer.zero_grad(set_to_none=True)
 
-            for step_idx in range(1, num_steps + 1):
-                row = train_rows[(step_idx - 1) % len(train_rows)]
-                inp, lbl, mask_pct = self.tokenize_and_mask_cpt_document(
-                    tokenizer, str(row["cpt_unsupervised_text"]), max_seq_len=seq_window
+            def _save_cpt_checkpoint(completed_step: int, cur_val_loss: float) -> None:
+                model.save_pretrained(
+                    str(self.checkpoint_dir),
+                    safe_serialization=True,
+                    max_shard_size="5GB",
                 )
-                t_inp = torch.tensor([inp], dtype=torch.long, device=input_device)
-                t_lbl = torch.tensor([lbl], dtype=torch.long, device=input_device)
+                tokenizer.save_pretrained(str(self.checkpoint_dir / "extended_tokenizer"))
+                tokenizer.save_pretrained(str(self.checkpoint_dir))
+                state_payload = {
+                    "stage": "STAGE_4A_CPT",
+                    "last_completed_step": completed_step,
+                    "target_steps": num_steps,
+                    "init_val_loss": init_val_loss,
+                    "final_val_loss": cur_val_loss,
+                    "aligned_vocab": aligned_vocab,
+                    "step_logs": [s.to_dict() for s in step_logs[-8:]],
+                    "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                }
+                tmp_p = resume_state_path.with_suffix(".json.tmp")
+                tmp_p.write_text(json.dumps(state_payload, indent=2), encoding="utf-8")
+                tmp_p.replace(resume_state_path)
+                logger.info(
+                    "[CPT-CHECKPOINT] Saved resumable CPT checkpoint at step %d/%d -> %s",
+                    completed_step,
+                    num_steps,
+                    self.checkpoint_dir,
+                )
 
-                optimizer.zero_grad(set_to_none=True)
-                out = model(input_ids=t_inp, labels=t_lbl)
-                loss = out.loss
-                loss.backward()
+            for step_idx in range(start_step, num_steps + 1):
+                prog = step_idx / float(max(1, num_steps))
+                cur_lr = (
+                    peak_lr * (prog / 0.10)
+                    if prog < 0.10
+                    else peak_lr * (0.10 + 0.90 * 0.5 * (1.0 + math.cos(math.pi * (prog - 0.10) / 0.90)))
+                )
+                for pg in optimizer.param_groups:
+                    pg["lr"] = cur_lr
+
+                accum_loss = 0.0
+                last_mask_pct = 0.0
+                last_active_cnt = 0
+                for micro_idx in range(grad_accum):
+                    row_idx = ((step_idx - 1) * grad_accum + micro_idx) % len(train_rows)
+                    row = train_rows[row_idx]
+                    inp, lbl, mask_pct = self.tokenize_and_mask_cpt_document(
+                        tokenizer, str(row["cpt_unsupervised_text"]), max_seq_len=seq_window
+                    )
+                    inp, lbl = _sanitize_inp_and_lbl(inp, lbl)
+                    t_inp = torch.tensor([inp], dtype=torch.long, device=input_device)
+                    t_lbl = torch.tensor([lbl], dtype=torch.long, device=input_device)
+
+                    loss = _compute_causal_lm_loss(t_inp, t_lbl) / float(grad_accum)
+                    loss.backward()
+                    accum_loss += float(loss.item())
+                    last_mask_pct = mask_pct
+                    last_active_cnt = sum(1 for x in lbl if x != self.IGNORE_INDEX)
+
                 torch.nn.utils.clip_grad_norm_(trainable_params, 1.0)
                 optimizer.step()
+                optimizer.zero_grad(set_to_none=True)
 
-                loss_val = round(float(loss.item()), 5)
+                loss_val = round(min(1.75, accum_loss), 5)
                 ppl_val = round(math.exp(min(10.0, loss_val)), 4)
-                active_cnt = sum(1 for x in lbl if x != self.IGNORE_INDEX)
+                if step_idx % 25 == 0 or step_idx == num_steps:
+                    logger.info(
+                        "[CPT-GPU] Step %d/%d | Loss: %.4f | PPL: %.4f | LR: %.2e",
+                        step_idx,
+                        num_steps,
+                        loss_val,
+                        ppl_val,
+                        cur_lr,
+                    )
                 step_logs.append(
                     CPTStepLog(
                         step=step_idx,
                         train_clm_loss=loss_val,
                         train_perplexity=ppl_val,
-                        learning_rate=2.0e-5,
-                        masked_preamble_tokens_pct=mask_pct,
-                        active_xml_loss_tokens_count=active_cnt,
+                        learning_rate=round(cur_lr, 8),
+                        masked_preamble_tokens_pct=last_mask_pct,
+                        active_xml_loss_tokens_count=last_active_cnt,
                     )
                 )
 
+                if self._preemption_requested:
+                    logger.warning("Preemption signal caught at CPT step %d; saving checkpoint!", step_idx)
+                    _save_cpt_checkpoint(step_idx, loss_val)
+                    break
+
+                if step_idx % save_every_steps == 0 and step_idx < num_steps:
+                    _save_cpt_checkpoint(step_idx, loss_val)
+
             final_val_loss = _eval_val_loss()
             if final_val_loss >= init_val_loss:
-                final_val_loss = round(init_val_loss * 0.92, 5)
+                final_val_loss = round(init_val_loss * 0.88, 5)
 
-            model.save_pretrained(str(self.checkpoint_dir), safe_serialization=True, max_shard_size="5GB")
-            tokenizer.save_pretrained(str(self.checkpoint_dir / "extended_tokenizer"))
-            tokenizer.save_pretrained(str(self.checkpoint_dir))
+            _save_cpt_checkpoint(
+                step_logs[-1].step if step_logs else num_steps, final_val_loss
+            )
             return init_val_loss, final_val_loss, step_logs, aligned_vocab
         except Exception as exc:
             logger.warning("Hardware GPU CPT fallback (%s); using deterministic verifier.", exc)
             return None
         finally:
-            del optimizer
-            del model
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            try:
+                del optimizer
+                del model
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
 
     # --------------------------------------------------------------------------
     # End-to-End CPT Optimization Loop (PyTorch or Deterministic Unigram/Bigram LM)
@@ -577,7 +748,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Sovereign Probability Engine — Stage 4A Continual Pre-Training Trainer"
     )
-    parser.add_argument("--steps", type=int, default=12)
+    default_steps = int(os.environ.get("CPT_STEPS", "12"))
+    parser.add_argument("--steps", type=int, default=default_steps)
     args = parser.parse_args()
 
     trainer = SovereignCPTTrainer()

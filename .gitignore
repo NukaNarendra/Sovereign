@@ -33,3 +33,11 @@ remote_backup/
 
 # IDE configuration
 .idea/
+
+# Locally stored trained model artifacts
+03_llm_training/model_registry/checkpoints/**/*.safetensors
+03_llm_training/model_registry/checkpoints/**/*.gguf
+03_llm_training/model_registry/exports/**/*.safetensors
+03_llm_training/model_registry/exports/**/*.gguf
+sovereign_trained_lora_and_certs.tar.gz
+**/.ipynb_checkpoints/

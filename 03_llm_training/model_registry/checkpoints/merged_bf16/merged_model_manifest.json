@@ -1,7 +1,7 @@
 {
   "stage": "STAGE_5_PART_B_MERGE_LORA_ADAPTERS",
-  "timestamp_utc": "2026-11-05T03:18:16.570025+00:00",
-  "execution_mode": "WSL2_DETERMINISTIC_RSLORA_FUSION_VERIFIED",
+  "timestamp_utc": "2026-11-05T13:16:51.617451+00:00",
+  "execution_mode": "MI300X_HARDWARE_SAFETENSORS_MERGE",
   "model_id": "sovereign-quant/Sovereign-Prob-7B-GRPO-BF16",
   "base_architecture": "Qwen/Qwen2.5-7B",
   "extended_vocab_size_aligned": 151744,
@@ -93,5 +93,5 @@
     }
   ],
   "merged_checkpoint_dir": "03_llm_training/model_registry/checkpoints/merged_bf16",
-  "safetensors_manifest_sha256": "fc693f945417014e99df02aa74027d6a6e6c4e5778ec5ba6ee4d3342448b2995"
+  "safetensors_manifest_sha256": "e80bc94fb54b44bb8274d8d97168f2b00c9c830813c2f6bd48c887268810e2a8"
 }

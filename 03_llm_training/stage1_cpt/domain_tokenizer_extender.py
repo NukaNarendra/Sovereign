@@ -388,6 +388,12 @@ class DomainTokenizerExtender:
         added_count = tokenizer.add_special_tokens(
             {"additional_special_tokens": list(ALL_DOMAIN_SPECIAL_TOKENS)}
         )
+        if added_count == 0 and len(tokenizer) >= (
+            151646 + len(ALL_DOMAIN_SPECIAL_TOKENS)
+        ):
+            # Tokenizer was loaded from cached extended_tokenizer directory where
+            # all 43 domain tokens were already registered in an earlier step.
+            added_count = len(ALL_DOMAIN_SPECIAL_TOKENS)
         unpadded_len = len(tokenizer)
         aligned_len = self.compute_padded_vocab_size(
             unpadded_len, multiple=self.pad_to_multiple_of

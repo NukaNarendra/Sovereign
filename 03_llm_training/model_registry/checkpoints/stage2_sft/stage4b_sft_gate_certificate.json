@@ -1,7 +1,7 @@
 {
   "stage": "STAGE_4B_SUPERVISED_FINETUNING_TRAINER",
-  "timestamp_utc": "2026-11-01T08:45:09.249474+00:00",
-  "execution_profile": "WSL2_LOCAL_VERIFICATION_PROFILE",
+  "timestamp_utc": "2026-11-05T13:08:23.212046+00:00",
+  "execution_profile": "DUAL_L40S_OR_GPU_PEFT_LORA_BF16_2GPU",
   "upstream_cpt_checkpoint_verified": true,
   "train_sft_shard": "data/processed_warehouse/final_splits/sft_reasoning/train_sft_shard_00000.parquet",
   "val_sft_shard": "data/processed_warehouse/final_splits/sft_reasoning/val_sft_shard_00000.parquet",
@@ -10,10 +10,10 @@
   "lora_rank_r": 64,
   "lora_alpha": 128,
   "prompt_tokens_100pct_masked_with_neg100": true,
-  "initial_val_completion_loss": 1.96006,
-  "final_val_completion_loss": 1.5292,
-  "initial_val_completion_perplexity": 7.0998,
-  "final_val_completion_perplexity": 4.6145,
+  "initial_val_completion_loss": 1.78084,
+  "final_val_completion_loss": 1.32998,
+  "initial_val_completion_perplexity": 5.9348,
+  "final_val_completion_perplexity": 3.781,
   "val_xml_schema_compliance_pct": 100.0,
   "val_algebraic_edge_consistency_pct": 100.0,
   "val_algebraic_edge_mae": 0.00071,
@@ -21,36 +21,36 @@
   "checkpoint_saved_dir": "03_llm_training/model_registry/checkpoints/stage2_sft",
   "step_history": [
     {
-      "step": 12,
-      "weighted_completion_ce_loss": 1.56075,
-      "completion_perplexity": 4.7624,
-      "numeric_prob_edge_mae": 0.00207,
-      "learning_rate": 2.053e-05,
-      "prompt_tokens_masked_pct": 76.41
+      "step": 147,
+      "weighted_completion_ce_loss": 1.33123,
+      "completion_perplexity": 3.7857,
+      "numeric_prob_edge_mae": 0.00077,
+      "learning_rate": 1.011e-05,
+      "prompt_tokens_masked_pct": 79.51
     },
     {
-      "step": 13,
-      "weighted_completion_ce_loss": 1.54737,
-      "completion_perplexity": 4.6991,
-      "numeric_prob_edge_mae": 0.001588,
-      "learning_rate": 1.479e-05,
-      "prompt_tokens_masked_pct": 76.41
+      "step": 148,
+      "weighted_completion_ce_loss": 1.32997,
+      "completion_perplexity": 3.7809,
+      "numeric_prob_edge_mae": 0.000721,
+      "learning_rate": 1.005e-05,
+      "prompt_tokens_masked_pct": 79.51
     },
     {
-      "step": 14,
-      "weighted_completion_ce_loss": 1.53562,
-      "completion_perplexity": 4.6442,
-      "numeric_prob_edge_mae": 0.001107,
-      "learning_rate": 1.121e-05,
-      "prompt_tokens_masked_pct": 76.41
+      "step": 149,
+      "weighted_completion_ce_loss": 1.32873,
+      "completion_perplexity": 3.7762,
+      "numeric_prob_edge_mae": 0.000673,
+      "learning_rate": 1.001e-05,
+      "prompt_tokens_masked_pct": 79.51
     },
     {
-      "step": 15,
-      "weighted_completion_ce_loss": 1.52591,
-      "completion_perplexity": 4.5993,
+      "step": 150,
+      "weighted_completion_ce_loss": 1.32752,
+      "completion_perplexity": 3.7717,
       "numeric_prob_edge_mae": 0.000625,
       "learning_rate": 1e-05,
-      "prompt_tokens_masked_pct": 76.41
+      "prompt_tokens_masked_pct": 79.51
     }
   ]
 }

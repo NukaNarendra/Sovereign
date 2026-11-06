@@ -200,101 +200,227 @@ class SovereignSFTTrainer:
             torch.cuda.get_device_properties(i).total_memory / (1024 ** 3)
             for i in range(n_gpus)
         )
-        base_path = (
-            str(self.upstream_cpt_dir)
-            if (self.upstream_cpt_dir / "config.json").exists()
-            else os.environ.get("SOVEREIGN_BASE_MODEL", "Qwen/Qwen2.5-7B")
-        )
+        base_path = os.environ.get("SOVEREIGN_BASE_MODEL", "Qwen/Qwen2.5-7B")
+        resume_state_path = self.checkpoint_dir / "sft_resume_state.json"
+        adapter_safetensors_path = self.checkpoint_dir / "adapter_model.safetensors"
+        save_every_steps = int(os.environ.get("SAVE_EVERY_STEPS", "50"))
+        force_restart = os.environ.get("FORCE_RESTART", "0") == "1"
+        hw_sft_steps = int(os.environ.get("SFT_STEPS", "400"))
+
+        start_step = 1
+        if (
+            not force_restart
+            and resume_state_path.exists()
+            and adapter_safetensors_path.exists()
+        ):
+            try:
+                prev_state = json.loads(resume_state_path.read_text(encoding="utf-8"))
+                last_done = int(prev_state.get("last_completed_step", 0))
+                if last_done >= hw_sft_steps:
+                    logger.info(
+                        "[SFT-RESUME] Stage 4B SFT already completed (%d/%d steps) in %s; reusing saved LoRA adapter!",
+                        last_done,
+                        hw_sft_steps,
+                        self.checkpoint_dir,
+                    )
+                    return f"DUAL_L40S_OR_GPU_PEFT_LORA_BF16_{n_gpus}GPU_RESUMED"
+                start_step = last_done + 1
+            except Exception:
+                start_step = 1
+
         model = None
         peft_model = None
         optimizer = None
         try:
             logger.info(
-                "Running real GPU PEFT LoRA (r=64, alpha=128) SFT across %d GPU(s) (%.1f GiB VRAM) from %s...",
+                "Running real GPU PEFT LoRA (r=64, alpha=128) SFT across %d GPU(s) (%.1f GiB VRAM) from %s (steps %d..%d)...",
                 n_gpus,
                 total_vram_gib,
                 base_path,
+                start_step,
+                hw_sft_steps,
             )
-            tokenizer = AutoTokenizer.from_pretrained(base_path, trust_remote_code=True)
+            # Load native Qwen/Qwen2.5-7B BPE tokenizer so <reasoning>, <prob>, <edge>
+            # use Qwen2.5's pretrained 18-trillion-token BPE subwords and lm_head rows
+            base_hf_id = os.environ.get("SOVEREIGN_BASE_MODEL", "Qwen/Qwen2.5-7B")
+            tokenizer = AutoTokenizer.from_pretrained(base_hf_id, trust_remote_code=True)
             if tokenizer.pad_token is None:
                 tokenizer.pad_token = tokenizer.eos_token
 
-            max_mem_map = (
-                {i: f"{int(single_vram_gib * 0.88)}GiB" for i in range(n_gpus)}
-                if n_gpus > 1
-                else None
+            target_device_map: Any = (
+                {"": "cuda:0"}
+                if single_vram_gib >= 22.0 or n_gpus == 1
+                else "auto"
             )
             model = AutoModelForCausalLM.from_pretrained(
                 base_path,
                 torch_dtype=torch.bfloat16,
-                device_map="auto" if n_gpus > 1 else "cuda:0",
-                max_memory=max_mem_map,
+                device_map=target_device_map,
                 low_cpu_mem_usage=True,
                 trust_remote_code=True,
             )
+            vocab_limit = int(model.get_output_embeddings().weight.shape[0])
             model.config.use_cache = False
             if hasattr(model, "gradient_checkpointing_enable"):
                 model.gradient_checkpointing_enable()
 
-            lora_cfg = LoraConfig(
-                r=64,
-                lora_alpha=128,
-                lora_dropout=0.05,
-                use_rslora=True,
-                bias="none",
-                task_type="CAUSAL_LM",
-                target_modules=[
-                    "q_proj", "k_proj", "v_proj", "o_proj",
-                    "gate_proj", "up_proj", "down_proj",
-                ],
-            )
-            peft_model = get_peft_model(model, lora_cfg)
+            if start_step > 1 and adapter_safetensors_path.exists():
+                from peft import PeftModel  # type: ignore
+
+                logger.info(
+                    "[SFT-RESUME] Loading existing SFT LoRA adapter from %s at step %d...",
+                    self.checkpoint_dir,
+                    start_step,
+                )
+                peft_model = PeftModel.from_pretrained(
+                    model, str(self.checkpoint_dir), is_trainable=True
+                )
+            else:
+                lora_cfg = LoraConfig(
+                    r=64,
+                    lora_alpha=128,
+                    lora_dropout=0.05,
+                    use_rslora=True,
+                    bias="none",
+                    task_type="CAUSAL_LM",
+                    target_modules=[
+                        "q_proj", "k_proj", "v_proj", "o_proj",
+                        "gate_proj", "up_proj", "down_proj",
+                    ],
+                )
+                peft_model = get_peft_model(model, lora_cfg)
+
             peft_model.train()
             trainable_params = [p for p in peft_model.parameters() if p.requires_grad]
-            input_device = next(peft_model.parameters()).device
-            optimizer = torch.optim.AdamW(trainable_params, lr=1.0e-4, weight_decay=0.01)
+            input_device = torch.device("cuda:0")
+            peak_lr = 1.0e-4
+            optimizer = torch.optim.AdamW(trainable_params, lr=peak_lr, weight_decay=0.01)
 
-            max_seq = 1280 if total_vram_gib >= 45.0 else 768
-            num_hw_samples = 20 if total_vram_gib >= 45.0 else 12
+            max_seq = 2560 if single_vram_gib >= 35.0 else 1536
+            grad_accum = 4
+
+            def _save_sft_checkpoint(completed_step: int, last_loss: float) -> None:
+                peft_model.save_pretrained(
+                    str(self.checkpoint_dir), safe_serialization=True
+                )
+                tokenizer.save_pretrained(str(self.checkpoint_dir))
+                state_payload = {
+                    "stage": "STAGE_4B_SFT",
+                    "last_completed_step": completed_step,
+                    "target_steps": hw_sft_steps,
+                    "last_completion_ce_loss": round(last_loss, 5),
+                    "timestamp_utc": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+                }
+                tmp_p = resume_state_path.with_suffix(".json.tmp")
+                tmp_p.write_text(json.dumps(state_payload, indent=2), encoding="utf-8")
+                tmp_p.replace(resume_state_path)
+                logger.info(
+                    "[SFT-CHECKPOINT] Saved resumable SFT LoRA checkpoint at step %d/%d -> %s",
+                    completed_step,
+                    hw_sft_steps,
+                    self.checkpoint_dir,
+                )
 
             if train_examples:
                 import polars as pl  # type: ignore
 
-                raw_rows = pl.read_parquet(self.train_parquet).to_dicts()[:num_hw_samples]
-                for row in raw_rows:
-                    full_text = str(row.get("sft_full_chatml_text") or "")
-                    marker = "<|im_start|>assistant\n"
-                    pos = full_text.find(marker)
-                    if pos == -1:
-                        continue
-                    prefix_ids = tokenizer.encode(full_text[: pos + len(marker)], add_special_tokens=False)
-                    comp_ids = tokenizer.encode(full_text[pos + len(marker) :], add_special_tokens=False)
-                    keep_p = max(64, max_seq - len(comp_ids))
-                    prefix_ids = prefix_ids[-keep_p:]
-                    inp_ids = (prefix_ids + comp_ids)[:max_seq]
-                    lbl_ids = ([-100] * len(prefix_ids) + comp_ids)[:max_seq]
+                raw_rows = pl.read_parquet(self.train_parquet).to_dicts()
+                optimizer.zero_grad(set_to_none=True)
 
-                    t_inp = torch.tensor([inp_ids], dtype=torch.long, device=input_device)
-                    t_lbl = torch.tensor([lbl_ids], dtype=torch.long, device=input_device)
-                    optimizer.zero_grad(set_to_none=True)
-                    out = peft_model(input_ids=t_inp, labels=t_lbl)
-                    out.loss.backward()
+                for step_idx in range(start_step, hw_sft_steps + 1):
+                    prog = step_idx / float(max(1, hw_sft_steps))
+                    cur_lr = (
+                        peak_lr * (prog / 0.10)
+                        if prog < 0.10
+                        else peak_lr * (0.10 + 0.90 * 0.5 * (1.0 + math.cos(math.pi * (prog - 0.10) / 0.90)))
+                    )
+                    for pg in optimizer.param_groups:
+                        pg["lr"] = cur_lr
+
+                    accum_loss = 0.0
+                    for micro_idx in range(grad_accum):
+                        row = raw_rows[((step_idx - 1) * grad_accum + micro_idx) % len(raw_rows)]
+                        full_text = str(row.get("sft_full_chatml_text") or "")
+                        marker = "<|im_start|>assistant\n"
+                        pos = full_text.find(marker)
+                        if pos == -1:
+                            continue
+                        prefix_ids = tokenizer.encode(full_text[: pos + len(marker)], add_special_tokens=False)
+                        comp_ids = tokenizer.encode(full_text[pos + len(marker) :], add_special_tokens=False)
+                        if not comp_ids:
+                            continue
+                        keep_p = max(256, max_seq - len(comp_ids))
+                        if len(prefix_ids) > keep_p:
+                            head_p = keep_p - 256
+                            prefix_ids = prefix_ids[:head_p] + prefix_ids[-256:]
+                        raw_inp = (prefix_ids + comp_ids)[:max_seq]
+                        raw_lbl = ([-100] * len(prefix_ids) + comp_ids)[:max_seq]
+
+                        inp_ids = [
+                            int(t) if (0 <= int(t) < vocab_limit) else 0 for t in raw_inp
+                        ]
+                        lbl_ids = [
+                            int(t) if (0 <= int(t) < vocab_limit) else -100 for t in raw_lbl
+                        ]
+                        if all(x == -100 for x in lbl_ids[1:]):
+                            continue
+
+                        t_inp = torch.tensor([inp_ids], dtype=torch.long, device=input_device)
+                        t_lbl = torch.tensor([lbl_ids], dtype=torch.long, device=input_device)
+                        out = peft_model(input_ids=t_inp, use_cache=False)
+                        logits = out.logits
+                        shift_logits = (
+                            logits[:, :-1, :].contiguous().float().view(-1, logits.size(-1))
+                        )
+                        shift_labels = (
+                            t_lbl[:, 1:].contiguous().view(-1).to(shift_logits.device)
+                        )
+                        loss = (
+                            torch.nn.functional.cross_entropy(
+                                shift_logits, shift_labels, ignore_index=-100
+                            )
+                            / float(grad_accum)
+                        )
+                        loss.backward()
+                        accum_loss += float(loss.item())
+
                     torch.nn.utils.clip_grad_norm_(trainable_params, 1.0)
                     optimizer.step()
+                    optimizer.zero_grad(set_to_none=True)
 
-            peft_model.save_pretrained(str(self.checkpoint_dir), safe_serialization=True)
-            tokenizer.save_pretrained(str(self.checkpoint_dir))
+                    if step_idx % 25 == 0 or step_idx == hw_sft_steps:
+                        logger.info(
+                            "[SFT-GPU] Step %d/%d (Examples seen: %d) | Completion CE Loss: %.4f | LR: %.2e",
+                            step_idx,
+                            hw_sft_steps,
+                            step_idx * grad_accum,
+                            accum_loss,
+                            cur_lr,
+                        )
+
+                    if self._preemption_requested:
+                        logger.warning("Preemption signal caught at SFT step %d; saving checkpoint!", step_idx)
+                        _save_sft_checkpoint(step_idx, accum_loss)
+                        break
+
+                    if step_idx % save_every_steps == 0 and step_idx < hw_sft_steps:
+                        _save_sft_checkpoint(step_idx, accum_loss)
+
+            _save_sft_checkpoint(hw_sft_steps, accum_loss if train_examples else 0.0)
             return f"DUAL_L40S_OR_GPU_PEFT_LORA_BF16_{n_gpus}GPU"
         except Exception as exc:
             logger.warning("Hardware PEFT SFT fallback (%s).", exc)
             return "WSL2_LOCAL_VERIFICATION_PROFILE"
         finally:
-            del optimizer
-            del peft_model
-            del model
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            try:
+                del optimizer
+                del peft_model
+                del model
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
 
     # --------------------------------------------------------------------------
     # End-to-End Stage 4B SFT Optimization & Calibration Verification Loop
@@ -508,7 +634,8 @@ def main() -> int:
     parser = argparse.ArgumentParser(
         description="Sovereign Probability Engine — Stage 4B Supervised Fine-Tuning Trainer"
     )
-    parser.add_argument("--steps", type=int, default=15)
+    default_steps = int(os.environ.get("SFT_STEPS", "15"))
+    parser.add_argument("--steps", type=int, default=default_steps)
     args = parser.parse_args()
 
     trainer = SovereignSFTTrainer()

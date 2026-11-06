@@ -197,11 +197,7 @@ class LoRAWeightMerger:
             from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore
             from peft import PeftModel  # type: ignore
 
-            base_source = (
-                str(self.cpt_dir)
-                if (self.cpt_dir / "config.json").exists()
-                else os.environ.get("SOVEREIGN_BASE_MODEL", "Qwen/Qwen2.5-7B")
-            )
+            base_source = os.environ.get("SOVEREIGN_BASE_MODEL", "Qwen/Qwen2.5-7B")
             logger.info(
                 "Detected hardware PEFT safetensors at %s; executing BF16 merge_and_unload() from %s...",
                 adapter_safetensors,
@@ -210,7 +206,7 @@ class LoRAWeightMerger:
             base_model = AutoModelForCausalLM.from_pretrained(
                 base_source,
                 torch_dtype=torch.bfloat16,
-                device_map="auto",
+                device_map={"": "cuda:0"} if torch.cuda.is_available() else "cpu",
                 low_cpu_mem_usage=True,
                 trust_remote_code=True,
             )
@@ -219,23 +215,17 @@ class LoRAWeightMerger:
             merged_model.save_pretrained(
                 str(self.merged_dir), safe_serialization=True, max_shard_size="4GB"
             )
-            tok_source = (
-                str(self.grpo_dir)
-                if (self.grpo_dir / "tokenizer.json").exists()
-                else (
-                    str(self.cpt_dir / "extended_tokenizer")
-                    if (self.cpt_dir / "extended_tokenizer" / "tokenizer.json").exists()
-                    else base_source
-                )
-            )
-            tok = AutoTokenizer.from_pretrained(tok_source, trust_remote_code=True)
+            tok = AutoTokenizer.from_pretrained(base_source, trust_remote_code=True)
             tok.save_pretrained(str(self.merged_dir))
-            del merged_model
-            del peft_model
-            del base_model
-            gc.collect()
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            try:
+                del merged_model
+                del peft_model
+                del base_model
+                gc.collect()
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+            except Exception:
+                pass
             return True
         except Exception as exc:
             logger.warning(

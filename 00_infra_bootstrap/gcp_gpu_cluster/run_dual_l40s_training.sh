@@ -1,4 +1,3 @@
-
 #!/usr/bin/env bash
 
 # ==============================================================================
@@ -24,9 +23,7 @@ JOB_START_EPOCH="$(date +%s)"
 JOB_ID="${JOB_ID:-DUAL_L40S_$(date -u +%Y%m%dT%H%M%SZ)}"
 
 LOG_DIR="${REPO_ROOT}/logs/job_${JOB_ID}"
-
 CHECKPOINT_ROOT="${REPO_ROOT}/03_llm_training/model_registry/checkpoints"
-
 EMERGENCY_SENTINEL="${CHECKPOINT_ROOT}/EMERGENCY_CREDIT_DRAIN_FLUSH.flag"
 
 PYTHON="${PYTHON:-${REPO_ROOT}/.venv/bin/python}"
@@ -43,10 +40,19 @@ fi
 CONFIRM_TRAINING="${CONFIRM_TRAINING:-NO}"
 DOWNLOAD_HF="${DOWNLOAD_HF:-1}"
 
+export CPT_STEPS="${CPT_STEPS:-200}"
+export SFT_STEPS="${SFT_STEPS:-400}"
+export GRPO_STEPS="${GRPO_STEPS:-200}"
+export SAVE_EVERY_STEPS="${SAVE_EVERY_STEPS:-50}"
+export SKIP_COMPLETED_STAGES="${SKIP_COMPLETED_STAGES:-1}"
+
 export CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:-0,1}"
+export CUDA_DEVICE_ORDER="PCI_BUS_ID"
+
+export NCCL_P2P_DISABLE="${NCCL_P2P_DISABLE:-1}"
+export NCCL_IB_DISABLE="${NCCL_IB_DISABLE:-1}"
 
 export PYTORCH_CUDA_ALLOC_CONF="${PYTORCH_CUDA_ALLOC_CONF:-expandable_segments:True,max_split_size_mb:512}"
-
 export TOKENIZERS_PARALLELISM="false"
 
 mkdir -p \
@@ -90,6 +96,11 @@ log_info "Starting Dual-L40S training job ${JOB_ID}."
 log_info "Repository: ${REPO_ROOT}"
 log_info "Logs: ${LOG_DIR}"
 log_info "Visible CUDA Devices: ${CUDA_VISIBLE_DEVICES}"
+log_info "CPT Steps: ${CPT_STEPS}"
+log_info "SFT Steps: ${SFT_STEPS}"
+log_info "GRPO Steps: ${GRPO_STEPS}"
+log_info "Save Every Steps: ${SAVE_EVERY_STEPS}"
+log_info "Skip Completed Stages: ${SKIP_COMPLETED_STAGES}"
 
 rm -f "${EMERGENCY_SENTINEL}"
 
@@ -107,17 +118,14 @@ import polars as pl
 required_shards = [
     "data/processed_warehouse/final_splits/cpt_corpus/train_cpt_shard_00000.parquet",
     "data/processed_warehouse/final_splits/cpt_corpus/val_cpt_shard_00000.parquet",
-
     "data/processed_warehouse/final_splits/sft_reasoning/train_sft_shard_00000.parquet",
     "data/processed_warehouse/final_splits/sft_reasoning/val_sft_shard_00000.parquet",
-
     "data/processed_warehouse/final_splits/grpo_verifiable/train_grpo_shard_00000.parquet",
     "data/processed_warehouse/final_splits/grpo_verifiable/val_grpo_shard_00000.parquet",
     "data/processed_warehouse/final_splits/grpo_verifiable/test_grpo_shard_00000.parquet",
 ]
 
 for rel in required_shards:
-
     path = Path(rel)
 
     if not path.exists():
@@ -154,14 +162,12 @@ print("PyTorch version:", torch.__version__)
 print("CUDA available:", torch.cuda.is_available())
 
 if torch.cuda.is_available():
-
     n_gpus = torch.cuda.device_count()
     total_vram_gib = 0.0
 
     print(f"Detected {n_gpus} CUDA GPU(s):")
 
     for idx in range(n_gpus):
-
         name = torch.cuda.get_device_name(idx)
         props = torch.cuda.get_device_properties(idx)
 
@@ -194,7 +200,6 @@ if torch.cuda.is_available():
     )
 
 else:
-
     print(
         "NOTE: No physical CUDA GPU detected "
         "(CPU Pre-Flight Mode)."
@@ -207,15 +212,11 @@ PY
 # ==============================================================================
 
 if [[ "${CONFIRM_TRAINING}" != "YES" ]]; then
-
     log_warn "Preflight checks completed. Training was NOT started."
     log_warn "CONFIRM_TRAINING=${CONFIRM_TRAINING}"
-
     log_warn "To start training, execute:"
     log_warn "CONFIRM_TRAINING=YES bash 00_infra_bootstrap/gcp_gpu_cluster/run_dual_l40s_training.sh"
-
     exit 0
-
 fi
 
 # ==============================================================================
@@ -223,7 +224,6 @@ fi
 # ==============================================================================
 
 run_step() {
-
     local step_name="$1"
 
     local stdout_path="${LOG_DIR}/${step_name}.stdout.log"
@@ -234,11 +234,8 @@ run_step() {
     log_info "Starting ${step_name}..."
 
     if "$@" >"${stdout_path}" 2>"${stderr_path}"; then
-
         log_info "Completed ${step_name}."
-
     else
-
         local status=$?
 
         log_warn "${step_name} FAILED with exit code ${status}!"
@@ -247,9 +244,7 @@ run_step() {
         tail -n 60 "${stderr_path}" >&2 || true
 
         return "${status}"
-
     fi
-
 }
 
 export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
@@ -259,39 +254,58 @@ export PYTHONPATH="${REPO_ROOT}${PYTHONPATH:+:${PYTHONPATH}}"
 # ==============================================================================
 
 if [[ "${DOWNLOAD_HF}" == "1" ]]; then
-
     run_step \
         "stage4a_tokenizer" \
         "${PYTHON}" \
         -m 03_llm_training.stage1_cpt.domain_tokenizer_extender \
         --download-hf
-
 else
-
     run_step \
         "stage4a_tokenizer" \
         "${PYTHON}" \
         -m 03_llm_training.stage1_cpt.domain_tokenizer_extender
+fi
+
+# ------------------------------------------------------------------------------
+# STAGE 4A: CPT WITH RESUME GUARD
+# ------------------------------------------------------------------------------
+
+if [[ "${SKIP_COMPLETED_STAGES}" == "1" ]] \
+    && compgen -G "${CHECKPOINT_ROOT}/stage1_cpt/model*.safetensors" >/dev/null \
+    && [[ -f "${CHECKPOINT_ROOT}/stage1_cpt/stage4a_cpt_gate_certificate.json" ]]; then
+
+    log_info "[RESUME-GUARD] Stage 4A CPT checkpoint and gate certificate already exist."
+    log_info "[RESUME-GUARD] Skipping CPT and resuming from Stage 4B SFT."
+
+else
+
+    run_step \
+        "stage4a_cpt" \
+        "${PYTHON}" \
+        -m 03_llm_training.stage1_cpt.run_cpt_trainer \
+        --steps "${CPT_STEPS}"
 
 fi
 
-run_step \
-    "stage4a_cpt" \
-    "${PYTHON}" \
-    -m 03_llm_training.stage1_cpt.run_cpt_trainer \
-    --steps 16
+# ------------------------------------------------------------------------------
+# STAGE 4B: SFT
+# ------------------------------------------------------------------------------
 
 run_step \
     "stage4b_sft" \
     "${PYTHON}" \
     -m 03_llm_training.stage2_sft.run_sft_trainer \
-    --steps 20
+    --steps "${SFT_STEPS}"
+
+# ------------------------------------------------------------------------------
+# STAGE 5: GRPO
+# ------------------------------------------------------------------------------
 
 run_step \
     "stage5_grpo" \
     "${PYTHON}" \
     -m 03_llm_training.stage3_grpo_brier_edge.run_grpo_pipeline \
-    --steps 24
+    --steps "${GRPO_STEPS}"
 
 # ==============================================================================
 # 6. EVALUATION, QUANTIZATION AND DEPLOYMENT
