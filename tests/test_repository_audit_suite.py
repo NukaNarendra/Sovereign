@@ -186,6 +186,60 @@ class TestSovereignRepositoryAudit(unittest.TestCase):
                 f"Missing {required_step} in run_gcp_cuda_training.sh (truncated file)!",
             )
 
+    def test_08_stage7_execution_risk_engine_kelly_and_eip712(self) -> None:
+        """Verifies Net EV, 3.5% Hurdle Gate, 0.25x Kelly Sizer, and EIP-712 Signer."""
+        ev_mod = importlib.import_module(
+            "05_execution_risk_engine.edge_calculator.net_ev_calculator"
+        )
+        gate_mod = importlib.import_module(
+            "05_execution_risk_engine.edge_calculator.minimum_hurdle_gate"
+        )
+        kelly_mod = importlib.import_module(
+            "05_execution_risk_engine.fractional_kelly_sizer.kelly_criterion"
+        )
+        sig_mod = importlib.import_module(
+            "05_execution_risk_engine.venue_adapters.polymarket_clob_executor.clob_v2_order_signer"
+        )
+
+        ev_calc = ev_mod.NetExpectedValueCalculator()
+        ev_res = ev_calc.evaluate_net_ev(0.0050, 0.3147, 0.0162, "PIT-558938-T168H")
+        self.assertTrue(ev_res.is_positive_net_ev)
+        self.assertEqual(ev_res.candidate_side, "BUY_NO")
+
+        gate = gate_mod.MinimumHurdleGate(min_net_ev_hurdle=0.035)
+        gate_res = gate.evaluate_gate(ev_res, uma_hazard_score=0.15)
+        self.assertTrue(gate_res.approved_for_kelly_sizing)
+
+        kelly = kelly_mod.FractionalKellyCriterion(
+            kelly_dampener_c=0.25, max_single_market_fraction=0.15
+        )
+        k_res = kelly.compute_kelly_allocation(
+            ev_res.win_probability_on_side,
+            ev_res.total_all_in_cost_per_share,
+            liquid_bankroll_usd=5.00,
+        )
+        self.assertLessEqual(k_res.capped_bankroll_fraction, 0.15)
+        self.assertGreater(k_res.recommended_stake_usd, 0.0)
+
+        signer = sig_mod.CLOBv2EIP712OrderSigner()
+        signed = signer.sign_clob_limit_order(
+            "ORD-UNIT-01", "100998877", 686800, 1010000, side="BUY_NO"
+        )
+        self.assertEqual(signed.chain_id, 137)
+        self.assertTrue(signed.ecdsa_signature_hex.startswith("0x"))
+
+    def test_09_stage8_survival_watchdog_earn_or_die(self) -> None:
+        """Verifies Polygon NAV auditor, CTF auto-redeemer, $50 mitosis spawner, and $0 Reaper kill-switch."""
+        import asyncio
+
+        wd_mod = importlib.import_module(
+            "06_survival_watchdog.reaper_controller.watchdog_daemon"
+        )
+        report = asyncio.run(wd_mod._run_three_regime_verification())
+        self.assertTrue(report["healthy_regime_alive_verified"])
+        self.assertTrue(report["mitosis_50usd_clone_spawn_verified"])
+        self.assertTrue(report["reaper_zero_nav_kill_switch_verified"])
+
 
 if __name__ == "__main__":
     unittest.main()

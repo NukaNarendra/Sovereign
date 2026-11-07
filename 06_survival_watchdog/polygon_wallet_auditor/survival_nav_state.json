@@ -1,0 +1,12 @@
+{
+  "agent_id": "sovereign_survival_agent",
+  "initial_seed_usd": 5.0,
+  "liquid_pusd_balance": 5.33,
+  "unrealized_ctf_value_usd": 0.678,
+  "accrued_compute_burn_usd": 0.0093,
+  "net_liquid_nav_usd": 5.9987,
+  "survival_death_floor_usd": 0.0,
+  "mitosis_clone_trigger_usd": 50.0,
+  "status": "ALIVE_EARNING",
+  "last_audit_timestamp_utc": "2026-11-07T06:51:01.554134+00:00"
+}
